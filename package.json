@@ -1,17 +1,17 @@
 {
-  "name": "@relayplane/proxy",
+  "name": "aiproviderproxy",
   "version": "1.9.38",
-  "description": "Open source cost intelligence proxy for AI agents. Cut LLM costs ~80% with smart model routing. Dashboard, policy engine, 11 providers. MIT licensed.",
-  "homepage": "https://relayplane.com",
+  "private": true,
+  "description": "Local multi-protocol AI gateway (aipp): Anthropic Messages and OpenAI Chat Completions across providers, with routing, redaction, and usage export.",
   "repository": {
     "type": "git",
-    "url": "https://github.com/RelayPlane/proxy"
+    "url": "https://github.com/heffter/aiProviderProxy"
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "relayplane": "dist/cli.js",
-    "relayplane-proxy": "dist/cli.js"
+    "aipp": "dist/cli/aipp.js",
+    "aiproviderproxy": "dist/cli/aipp.js"
   },
   "scripts": {
     "build": "tsc",
@@ -73,9 +73,6 @@
   },
   "engines": {
     "node": ">=18"
-  },
-  "publishConfig": {
-    "access": "public"
   },
   "files": [
     "dist",
