@@ -1,0 +1,115 @@
+# Protocol conformance fixture corpus
+
+Recorded, sanitized captures of the **legacy proxy** (`src/standalone-proxy.ts`)
+used as the behavioral reference for the greenfield gateway rewrite (epic
+AIPP-1; requirements PP-013, G-010, NFR-MAIN-002, FR-ANTH-017). The parity
+harness (subtask 1.4) replays these fixtures against both the legacy proxy and
+the new gateway and diffs the results.
+
+## Layout
+
+```
+test/fixtures/
+  <provider>/<case>/
+    request.json     scrubbed request  { method, url, headers, body }
+    response.json    scrubbed unary response { status, headers, body }
+    stream.jsonl     one scrubbed SSE event per line { event, data }
+  tools/             capture + scrub + lint tooling (see below)
+```
+
+- **Provider** is one of `anthropic`, `openai-chat`, `gemini`, `ollama` (the
+  parent directory name).
+- A case is **unary** (`request.json` + `response.json`) or **streaming**
+  (`request.json` + `stream.jsonl`). Route is carried by `request.url`;
+  streaming is implied by the presence of `stream.jsonl`.
+
+## Tooling (`test/fixtures/tools/`)
+
+| File | Purpose |
+|---|---|
+| `scrubber.ts` | Removes prompt/response text and every credential family; preserves structure (block types, roles, model ids, tool schemas, event ordering, usage numbers). |
+| `recorder.ts` | Shapes a raw interaction into a scrubbed fixture; opt-in via `AIPP_RECORD_FIXTURES`. |
+| `corpus.ts` | Case-directory layout, the `recordCorpusCase` tap, and the linter. |
+| `lint-corpus.ts` | CLI wrapper that lints the committed corpus and prints the coverage matrix. |
+
+### Scrubbing guarantees (enforced by `lint-corpus`)
+
+1. No secret pattern survives (`sk-ant-`, `sk-`, `Bearer`, `AIza`, `xai-`, `gsk_`, `AKIA`, ...).
+2. Every content-position string is a deterministic placeholder `<scrubbed:len:sha8>` (or `<redacted:secret>`); no raw prompt/response text survives.
+3. Only allowlisted headers are kept (`content-type`, `accept`, `accept-encoding`, `anthropic-version`, `anthropic-beta`, `user-agent`); auth headers are dropped.
+
+## Recording
+
+Recording is **opt-in and behavior-neutral** — nothing is written unless
+`AIPP_RECORD_FIXTURES` points at a directory:
+
+```
+AIPP_RECORD_FIXTURES=test/fixtures <run the legacy proxy and drive representative traffic>
+```
+
+The proxy-side tap is `recordCorpusCase(rawCapture, provider, caseName)` from
+`tools/corpus.ts`. Wiring this call into `src/standalone-proxy.ts` at the
+request/response/stream capture points is deferred to an environment where the
+proxy can be built and smoke-tested (it must remain behavior-neutral when the
+flag is unset); see the AIPP-1 notes.
+
+## Linting
+
+```
+# via a TypeScript-aware runtime
+node --import tsx test/fixtures/tools/lint-corpus.ts
+
+# or through the test suite (same validation)
+npx vitest run test/fixtures/tools/corpus.test.ts
+```
+
+Exit code is non-zero if any case fails; an empty corpus passes with a warning.
+
+## Coverage matrix
+
+Target cases for the corpus. **Status is `pending` — real-traffic capture is
+outstanding** (requires a live proxy, provider keys, and reproducible error
+conditions not available in the current environment). The tooling, layout, and
+linter above are complete and committed.
+
+### anthropic (`POST /v1/messages`, `POST /v1/messages/count_tokens`)
+
+| Case | Streaming | Status |
+|---|---|---|
+| plain-text | non-streaming + streaming | pending |
+| system-blocks | non-streaming | pending |
+| tools-and-tool-result | non-streaming + streaming | pending |
+| extended-thinking | non-streaming + streaming | pending |
+| prompt-caching-cache-control | non-streaming | pending |
+| count-tokens | non-streaming | pending |
+| error-4xx | non-streaming | pending |
+| error-429 | non-streaming | pending (where reproducible) |
+| error-5xx | non-streaming | pending (where reproducible) |
+
+### openai-chat (`POST /v1/chat/completions`, `openai` backend)
+
+| Case | Streaming | Status |
+|---|---|---|
+| text | non-streaming + streaming | pending |
+| tools | non-streaming + streaming | pending |
+| error-429 | non-streaming | pending (where reproducible) |
+| error-5xx | non-streaming | pending (where reproducible) |
+
+### gemini (`POST /v1/chat/completions`, `google` backend)
+
+| Case | Streaming | Status |
+|---|---|---|
+| text | non-streaming + streaming | pending |
+| tools | non-streaming + streaming | pending |
+| error-5xx | non-streaming | pending (where reproducible) |
+
+### ollama (`POST /v1/chat/completions`, `ollama` backend)
+
+| Case | Streaming | Status |
+|---|---|---|
+| text | non-streaming + streaming | pending |
+| tools | non-streaming | pending |
+
+> Note: `/v1/chat/completions` routed to the `anthropic` backend (OpenAI->Anthropic
+> translation) is also covered under `openai-chat` cases whose request targets an
+> Anthropic model, per the baseline (section 4).

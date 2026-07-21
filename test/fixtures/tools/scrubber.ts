@@ -156,6 +156,51 @@ export function scrubJson(value: unknown): unknown {
   return scrubValue(value, undefined, false);
 }
 
+/** Shape of a placeholder emitted by {@link scrubText}. */
+const CONTENT_PLACEHOLDER_RE = /^<scrubbed:\d+:[0-9a-f]{8}>$/;
+
+/**
+ * True if `value` is an already-scrubbed content string: an empty string, the
+ * secret marker, or a `<scrubbed:len:hash>` placeholder. Used by the corpus
+ * linter to prove content-position strings carry no raw text.
+ */
+export function isScrubbedPlaceholder(value: string): boolean {
+  return value === '' || value === SECRET_PLACEHOLDER || CONTENT_PLACEHOLDER_RE.test(value);
+}
+
+/**
+ * Walk a JSON value the same way {@link scrubValue} does and collect every
+ * content-position string (i.e. not a structural enum and not inside a schema
+ * region) that is NOT an already-scrubbed placeholder. An empty result means
+ * the value carries no unscrubbed content.
+ */
+export function collectContentLeaks(
+  value: unknown,
+  key?: string,
+  preserve = false,
+  out: string[] = [],
+): string[] {
+  if (typeof value === 'string') {
+    const isStructural = key !== undefined && STRUCTURAL_STRING_KEYS.has(key);
+    if (!preserve && !isStructural && !isScrubbedPlaceholder(value)) {
+      out.push(value);
+    }
+    return out;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectContentLeaks(item, key, preserve, out);
+    }
+    return out;
+  }
+  if (value !== null && typeof value === 'object') {
+    for (const [childKey, childValue] of Object.entries(value as Record<string, unknown>)) {
+      collectContentLeaks(childValue, childKey, preserve || PRESERVE_STRUCTURE_KEYS.has(childKey), out);
+    }
+  }
+  return out;
+}
+
 /**
  * Return a new headers object containing only allowlisted headers, with values
  * secret-redacted. Header names are lowercased; array values are joined.
