@@ -1,9 +1,11 @@
 /**
  * Configuration: schema, single loader, and redaction.
  *
- * Target-skeleton placeholder (epic AIPP-2, PRD section 10.1). Implementation
- * lands in later AIPP epics; this barrel fixes the module boundary and name.
+ * Public entry point for the AIPP-2 configuration subsystem (PRD section 10.1).
  */
+
+export * from './schema.js';
+export * from './loader.js';
 
 /** Identifies this module within the target skeleton. */
 export const MODULE_NAME = 'config';
