@@ -1,0 +1,43 @@
+# Protocol conformance parity baseline (epic AIPP-1).
+#
+# Regression safety net for the greenfield gateway rewrite: runs the fixture
+# corpus linter and the replay/parity harness. This job MUST be green before any
+# AIPP-2 (and later) work merges -- configure it as a required status check on
+# the default branch.
+#
+# The `test:parity` script runs only test/fixtures and test/parity (no `tsc`, no
+# src imports), so it does not depend on the legacy proxy building. Once the real
+# corpus is captured (subtask 1.3) and the proxy tap is wired, the same harness
+# additionally boots src/standalone-proxy.ts against mock upstreams and replays
+# the committed corpus.
+#
+# Note: this project's runtime dependencies include private @relayplane/*
+# packages. Making `npm install` resolve them on a hosted runner (publish or
+# vendor) is tracked separately; the parity tests themselves have no runtime
+# dependency on those packages.
+name: Parity baseline (AIPP-1)
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  parity-baseline:
+    name: Fixture lint + parity harness
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # No lockfile is committed yet, so use `npm install` rather than `npm ci`.
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Corpus lint + parity harness
+        run: npm run test:parity
