@@ -23,6 +23,7 @@
     "test/fixtures/**/*",
     "test/parity/**/*",
     "test/config/**/*",
+    "test/cli/**/*",
     "test/skeleton.test.ts"
   ]
 }

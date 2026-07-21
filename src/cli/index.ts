@@ -1,9 +1,8 @@
 /**
- * aipp CLI shell.
- *
- * Target-skeleton placeholder (epic AIPP-2, PRD section 10.1). Implementation
- * lands in later AIPP epics; this barrel fixes the module boundary and name.
+ * aipp CLI shell (epic AIPP-2, subtask 2.6).
  */
+
+export * from './cli.js';
 
 /** Identifies this module within the target skeleton. */
 export const MODULE_NAME = 'cli';

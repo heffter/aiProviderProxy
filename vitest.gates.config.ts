@@ -13,6 +13,7 @@ export default defineConfig({
       'test/fixtures/**/*.test.ts',
       'test/parity/**/*.test.ts',
       'test/config/**/*.test.ts',
+      'test/cli/**/*.test.ts',
       'test/skeleton.test.ts',
     ],
     coverage: {
@@ -31,6 +32,8 @@ export default defineConfig({
         'src/cli/**',
         'src/identity.ts',
       ],
+      // The executable entrypoint self-executes on import and cannot be unit-tested.
+      exclude: ['src/cli/aipp.ts'],
       all: true,
       thresholds: {
         lines: 80,
