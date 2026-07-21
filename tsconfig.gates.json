@@ -25,6 +25,7 @@
     "test/config/**/*",
     "test/cli/**/*",
     "test/lifecycle/**/*",
+    "test/ops/**/*",
     "test/skeleton.test.ts"
   ]
 }

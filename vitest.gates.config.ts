@@ -9,12 +9,19 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    // Load the native better-sqlite3 addon directly instead of transforming it.
+    server: {
+      deps: {
+        external: ['better-sqlite3'],
+      },
+    },
     include: [
       'test/fixtures/**/*.test.ts',
       'test/parity/**/*.test.ts',
       'test/config/**/*.test.ts',
       'test/cli/**/*.test.ts',
       'test/lifecycle/**/*.test.ts',
+      'test/ops/**/*.test.ts',
       'test/skeleton.test.ts',
     ],
     coverage: {
