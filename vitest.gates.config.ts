@@ -22,6 +22,7 @@ export default defineConfig({
       'test/cli/**/*.test.ts',
       'test/lifecycle/**/*.test.ts',
       'test/ops/**/*.test.ts',
+      'test/providers/**/*.test.ts',
       'test/skeleton.test.ts',
     ],
     coverage: {
