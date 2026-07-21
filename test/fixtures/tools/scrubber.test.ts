@@ -43,7 +43,12 @@ describe('redactSecrets / containsSecret', () => {
   });
 
   it('leaves structural identifiers untouched', () => {
-    for (const clean of ['claude-sonnet-4-20250514', 'gpt-4o', 'tool_use', 'assistant']) {
+    for (const clean of [
+      'claude-sonnet-4-20250514',
+      'gpt-4o',
+      'tool_use',
+      'assistant',
+    ]) {
       expect(redactSecrets(clean)).toBe(clean);
       expect(containsSecret(clean)).toBe(false);
     }
@@ -105,7 +110,11 @@ describe('scrubHeaders', () => {
 
 describe('scrubValue structure preservation', () => {
   it('preserves numbers, enums, ordering and object keys', () => {
-    const usage = { input_tokens: 1234, output_tokens: 56, cache_read_input_tokens: 7 };
+    const usage = {
+      input_tokens: 1234,
+      output_tokens: 56,
+      cache_read_input_tokens: 7,
+    };
     expect(scrubJson(usage)).toEqual(usage); // all numbers preserved verbatim
 
     const block = { type: 'text', text: PROMPT };
@@ -120,7 +129,10 @@ describe('scrubValue structure preservation', () => {
       { type: 'b', text: 'two' },
       { type: 'c', text: 'three' },
     ];
-    const scrubbed = scrubValue(events) as Array<{ type: string; text: string }>;
+    const scrubbed = scrubValue(events) as Array<{
+      type: string;
+      text: string;
+    }>;
     expect(scrubbed.map((e) => e.type)).toEqual(['a', 'b', 'c']);
     expect(scrubbed[1].text).not.toContain('two');
   });
@@ -132,7 +144,10 @@ describe('scrubValue structure preservation', () => {
         description: 'Look up the weather',
         input_schema: {
           type: 'object',
-          properties: { location: { type: 'string' }, units: { type: 'string' } },
+          properties: {
+            location: { type: 'string' },
+            units: { type: 'string' },
+          },
           required: ['location'],
         },
       },
@@ -151,11 +166,19 @@ describe('scrubValue whole-payload guarantee', () => {
       { role: 'user', content: [{ type: 'text', text: PROMPT }] },
       {
         role: 'assistant',
-        content: [{ type: 'tool_use', name: 'search', input: { query: PROMPT } }],
+        content: [
+          { type: 'tool_use', name: 'search', input: { query: PROMPT } },
+        ],
       },
     ],
     tools: [
-      { name: 'search', input_schema: { type: 'object', properties: { query: { type: 'string' } } } },
+      {
+        name: 'search',
+        input_schema: {
+          type: 'object',
+          properties: { query: { type: 'string' } },
+        },
+      },
     ],
     metadata: { note: `contact ${SECRETS.bearer}` },
     usage: { input_tokens: 42, output_tokens: 8 },

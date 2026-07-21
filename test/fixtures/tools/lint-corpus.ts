@@ -22,7 +22,10 @@ export function defaultCorpusRoot(): string {
 }
 
 /** Render a human-readable report and return the process exit code. */
-export function formatReport(report: CorpusLintReport): { text: string; code: number } {
+export function formatReport(report: CorpusLintReport): {
+  text: string;
+  code: number;
+} {
   const lines: string[] = [];
   lines.push('Fixture corpus lint');
   lines.push('===================');
@@ -52,7 +55,6 @@ export function formatReport(report: CorpusLintReport): { text: string; code: nu
 /** Lint the corpus at `baseDir`, print the report, and return the exit code. */
 export function runLint(baseDir: string = defaultCorpusRoot()): number {
   const { text, code } = formatReport(lintCorpus(baseDir));
-  // eslint-disable-next-line no-console
   console.log(text);
   return code;
 }

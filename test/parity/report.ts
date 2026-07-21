@@ -45,7 +45,11 @@ function typeOf(value: unknown): string {
 }
 
 /** Deep structural diff between an expected and an actual (already normalized) value. */
-export function diffValues(expected: unknown, actual: unknown, path = '$'): Diff[] {
+export function diffValues(
+  expected: unknown,
+  actual: unknown,
+  path = '$',
+): Diff[] {
   const diffs: Diff[] = [];
   const expType = typeOf(expected);
   const actType = typeOf(actual);
@@ -59,7 +63,12 @@ export function diffValues(expected: unknown, actual: unknown, path = '$'): Diff
     const expArr = expected as unknown[];
     const actArr = actual as unknown[];
     if (expArr.length !== actArr.length) {
-      diffs.push({ path, kind: 'length', expected: expArr.length, actual: actArr.length });
+      diffs.push({
+        path,
+        kind: 'length',
+        expected: expArr.length,
+        actual: actArr.length,
+      });
     }
     const max = Math.max(expArr.length, actArr.length);
     for (let i = 0; i < max; i += 1) {
@@ -119,9 +128,13 @@ export function formatReport(report: ParityReport): string {
   lines.push('='.repeat(24));
   lines.push(`${report.okCases}/${report.totalCases} cases match.`);
   for (const c of report.cases.filter((x) => !x.ok)) {
-    lines.push(`FAIL ${c.case} (${c.diffs.length} diff${c.diffs.length === 1 ? '' : 's'})`);
+    lines.push(
+      `FAIL ${c.case} (${c.diffs.length} diff${c.diffs.length === 1 ? '' : 's'})`,
+    );
     for (const d of c.diffs.slice(0, 20)) {
-      lines.push(`     - ${d.kind} at ${d.path}: expected ${JSON.stringify(d.expected)}, actual ${JSON.stringify(d.actual)}`);
+      lines.push(
+        `     - ${d.kind} at ${d.path}: expected ${JSON.stringify(d.expected)}, actual ${JSON.stringify(d.actual)}`,
+      );
     }
   }
   return lines.join('\n');

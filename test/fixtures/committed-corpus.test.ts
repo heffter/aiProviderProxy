@@ -20,6 +20,8 @@ describe('committed fixture corpus', () => {
 
   it('has every case fully scrubbed and structurally complete', () => {
     const failures = report.results.filter((r) => !r.ok);
-    expect(failures.map((f) => ({ case: f.case, errors: f.errors }))).toEqual([]);
+    expect(failures.map((f) => ({ case: f.case, errors: f.errors }))).toEqual(
+      [],
+    );
   });
 });

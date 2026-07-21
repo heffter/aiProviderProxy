@@ -35,9 +35,8 @@ jobs:
         with:
           node-version: '20'
 
-      # No lockfile is committed yet, so use `npm install` rather than `npm ci`.
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Corpus lint + parity harness
         run: npm run test:parity

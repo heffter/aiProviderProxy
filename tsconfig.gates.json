@@ -1,0 +1,28 @@
+{
+  "//": "Strict typecheck for NEW (AIPP-2+) code and tests only (epic AIPP-2, subtask 2.2). Legacy sources are checked by the main build.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "types": ["node"],
+    "skipLibCheck": true
+  },
+  "include": [
+    "src/gateway/**/*",
+    "src/protocols/**/*",
+    "src/providers/**/*",
+    "src/models/**/*",
+    "src/lifecycle/**/*",
+    "src/routing/**/*",
+    "src/integrations/**/*",
+    "src/ops/**/*",
+    "src/config/**/*",
+    "src/cli/**/*",
+    "src/identity.ts",
+    "src/fixtures/**/*",
+    "test/fixtures/**/*",
+    "test/parity/**/*",
+    "test/config/**/*",
+    "test/skeleton.test.ts"
+  ]
+}

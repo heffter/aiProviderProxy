@@ -83,12 +83,18 @@ describe('buildFixture', () => {
         method: 'POST',
         url: '/v1/messages?beta=true',
         headers: { 'content-type': 'application/json', authorization: BEARER },
-        body: { model: 'claude-sonnet-4-20250514', messages: [{ role: 'user', content: PROMPT }] },
+        body: {
+          model: 'claude-sonnet-4-20250514',
+          messages: [{ role: 'user', content: PROMPT }],
+        },
       },
       response: {
         status: 200,
         headers: { 'content-type': 'application/json' },
-        body: { content: [{ type: 'text', text: COMPLETION }], usage: { input_tokens: 100, output_tokens: 25 } },
+        body: {
+          content: [{ type: 'text', text: COMPLETION }],
+          usage: { input_tokens: 100, output_tokens: 25 },
+        },
       },
       usage: { input_tokens: 100, output_tokens: 25 },
     });
@@ -101,7 +107,9 @@ describe('buildFixture', () => {
 
     expect(fixture.schemaVersion).toBe(1);
     expect(fixture.request.url).toBe('/v1/messages'); // query stripped
-    expect(fixture.request.headers).toEqual({ 'content-type': 'application/json' }); // auth dropped
+    expect(fixture.request.headers).toEqual({
+      'content-type': 'application/json',
+    }); // auth dropped
     expect((fixture.usage as { input_tokens: number }).input_tokens).toBe(100);
   });
 
@@ -111,9 +119,18 @@ describe('buildFixture', () => {
       request: { method: 'POST', url: '/v1/chat/completions', body: {} },
       streamEvents: [
         { event: 'message_start', data: { type: 'message_start' } },
-        { event: 'content_block_delta', data: { type: 'text_delta', text: 'Hello ' } },
-        { event: 'content_block_delta', data: { type: 'text_delta', text: 'world' } },
-        { event: 'message_delta', data: { type: 'message_delta', usage: { output_tokens: 5 } } },
+        {
+          event: 'content_block_delta',
+          data: { type: 'text_delta', text: 'Hello ' },
+        },
+        {
+          event: 'content_block_delta',
+          data: { type: 'text_delta', text: 'world' },
+        },
+        {
+          event: 'message_delta',
+          data: { type: 'message_delta', usage: { output_tokens: 5 } },
+        },
         { event: 'message_stop', data: { type: 'message_stop' } },
       ],
     });
@@ -125,10 +142,15 @@ describe('buildFixture', () => {
       'message_delta',
       'message_stop',
     ]);
-    const delta = fixture.streamEvents?.[1].data as { type: string; text: string };
+    const delta = fixture.streamEvents?.[1].data as {
+      type: string;
+      text: string;
+    };
     expect(delta.type).toBe('text_delta'); // structure preserved
     expect(delta.text).not.toContain('Hello'); // content scrubbed
-    const usageEvent = fixture.streamEvents?.[3].data as { usage: { output_tokens: number } };
+    const usageEvent = fixture.streamEvents?.[3].data as {
+      usage: { output_tokens: number };
+    };
     expect(usageEvent.usage.output_tokens).toBe(5); // usage number preserved
   });
 });
@@ -137,7 +159,11 @@ describe('deterministic naming', () => {
   it('re-recording the same capture writes the same file', () => {
     const capture: RawCapture = {
       route: '/v1/messages',
-      request: { method: 'POST', url: '/v1/messages', body: { messages: [{ role: 'user', content: PROMPT }] } },
+      request: {
+        method: 'POST',
+        url: '/v1/messages',
+        body: { messages: [{ role: 'user', content: PROMPT }] },
+      },
     };
     const first = recordFixture(capture, workDir);
     const second = recordFixture(capture, workDir);
@@ -154,12 +180,14 @@ describe('round-trip against a mock upstream', () => {
 
   async function startServer(): Promise<void> {
     server = createServer((req, res) => {
-      let body = '';
-      req.on('data', (c) => {
-        body += c;
+      req.on('data', () => {
+        // drain the request body; the mock upstream ignores it
       });
       req.on('end', () => {
-        res.writeHead(200, { 'content-type': 'application/json', 'request-id': 'req_upstream_123' });
+        res.writeHead(200, {
+          'content-type': 'application/json',
+          'request-id': 'req_upstream_123',
+        });
         res.end(
           JSON.stringify({
             id: 'msg_123',
@@ -173,7 +201,9 @@ describe('round-trip against a mock upstream', () => {
         );
       });
     });
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve),
+    );
     port = (server.address() as AddressInfo).port;
   }
 
@@ -181,7 +211,11 @@ describe('round-trip against a mock upstream', () => {
     path: string,
     headers: Record<string, string>,
     bodyObj: unknown,
-  ): Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: unknown }> {
+  ): Promise<{
+    status: number;
+    headers: Record<string, string | string[] | undefined>;
+    body: unknown;
+  }> {
     return new Promise((resolve, reject) => {
       const data = JSON.stringify(bodyObj);
       const req = httpRequest(
@@ -197,7 +231,13 @@ describe('round-trip against a mock upstream', () => {
           res.on('data', (c) => {
             buf += c;
           });
-          res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: JSON.parse(buf) }));
+          res.on('end', () =>
+            resolve({
+              status: res.statusCode ?? 0,
+              headers: res.headers,
+              body: JSON.parse(buf),
+            }),
+          );
         },
       );
       req.on('error', reject);
@@ -222,13 +262,26 @@ describe('round-trip against a mock upstream', () => {
       model: 'claude-sonnet-4-20250514',
       messages: [{ role: 'user', content: [{ type: 'text', text: PROMPT }] }],
     };
-    const response = await post('/v1/messages?beta=true', requestHeaders, requestBody);
+    const response = await post(
+      '/v1/messages?beta=true',
+      requestHeaders,
+      requestBody,
+    );
 
     const capture: RawCapture = {
       route: '/v1/messages',
       provider: 'anthropic',
-      request: { method: 'POST', url: '/v1/messages?beta=true', headers: requestHeaders, body: requestBody },
-      response: { status: response.status, headers: response.headers, body: response.body },
+      request: {
+        method: 'POST',
+        url: '/v1/messages?beta=true',
+        headers: requestHeaders,
+        body: requestBody,
+      },
+      response: {
+        status: response.status,
+        headers: response.headers,
+        body: response.body,
+      },
       usage: (response.body as { usage: unknown }).usage,
     };
 
@@ -242,9 +295,14 @@ describe('round-trip against a mock upstream', () => {
 
     const fixture = JSON.parse(raw) as Fixture;
     expect(fixture.request.url).toBe('/v1/messages'); // query stripped
-    expect(fixture.request.headers).toEqual({ 'content-type': 'application/json' }); // auth + x-api-key dropped
+    expect(fixture.request.headers).toEqual({
+      'content-type': 'application/json',
+    }); // auth + x-api-key dropped
     expect(fixture.response?.status).toBe(200);
-    expect((fixture.response?.body as { usage: { input_tokens: number } }).usage.input_tokens).toBe(100);
+    expect(
+      (fixture.response?.body as { usage: { input_tokens: number } }).usage
+        .input_tokens,
+    ).toBe(100);
     expect((fixture.usage as { output_tokens: number }).output_tokens).toBe(25);
   });
 });

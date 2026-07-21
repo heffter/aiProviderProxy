@@ -61,8 +61,17 @@ export interface Fixture {
   schemaVersion: number;
   route: string;
   provider: string | null;
-  request: { method: string; url: string; headers: Record<string, string>; body: unknown };
-  response: { status: number; headers: Record<string, string>; body: unknown } | null;
+  request: {
+    method: string;
+    url: string;
+    headers: Record<string, string>;
+    body: unknown;
+  };
+  response: {
+    status: number;
+    headers: Record<string, string>;
+    body: unknown;
+  } | null;
   streamEvents: Array<{ event: string; data: unknown }> | null;
   usage: unknown;
   meta: Record<string, unknown>;
@@ -95,7 +104,10 @@ export function buildFixture(raw: RawCapture): Fixture {
         }
       : null,
     streamEvents: raw.streamEvents
-      ? raw.streamEvents.map((e) => ({ event: e.event, data: scrubValue(e.data) }))
+      ? raw.streamEvents.map((e) => ({
+          event: e.event,
+          data: scrubValue(e.data),
+        }))
       : null,
     usage: raw.usage !== undefined ? scrubValue(raw.usage) : null,
     meta: raw.meta ?? {},
@@ -119,7 +131,10 @@ function routeSlug(route: string): string {
  */
 export function fixtureFileName(fixture: Fixture): string {
   const kind = fixture.streamEvents ? 'stream' : 'unary';
-  const hash = createHash('sha256').update(JSON.stringify(fixture)).digest('hex').slice(0, 12);
+  const hash = createHash('sha256')
+    .update(JSON.stringify(fixture))
+    .digest('hex')
+    .slice(0, 12);
   return `${routeSlug(fixture.route)}-${kind}-${hash}.json`;
 }
 
@@ -150,7 +165,10 @@ export function isRecordingEnabled(): boolean {
  * @param dir target directory; defaults to {@link getFixtureDir}
  * @returns the written file path, or null when recording is disabled
  */
-export function recordFixture(raw: RawCapture, dir: string | null = getFixtureDir()): string | null {
+export function recordFixture(
+  raw: RawCapture,
+  dir: string | null = getFixtureDir(),
+): string | null {
   if (!dir) {
     return null;
   }

@@ -10,11 +10,23 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { compareCase, parseSse, replayCase, runParity, type ParityCase, type ReplayResult } from './harness.js';
+import {
+  compareCase,
+  parseSse,
+  replayCase,
+  runParity,
+  type ParityCase,
+  type ReplayResult,
+} from './harness.js';
 
 const baseExpected: ParityCase = {
   name: 'anthropic/plain-text',
-  request: { method: 'POST', url: '/v1/messages', headers: { 'content-type': 'application/json' }, body: { model: 'claude-sonnet-4' } },
+  request: {
+    method: 'POST',
+    url: '/v1/messages',
+    headers: { 'content-type': 'application/json' },
+    body: { model: 'claude-sonnet-4' },
+  },
   expectedResponse: {
     status: 200,
     headers: { 'content-type': 'application/json' },
@@ -30,10 +42,16 @@ const baseExpected: ParityCase = {
 };
 
 // A live-looking response: different id, real (unscrubbed) content, volatile headers.
-function liveResult(overrides: Partial<{ body: unknown; status: number }> = {}): ReplayResult {
+function liveResult(
+  overrides: Partial<{ body: unknown; status: number }> = {},
+): ReplayResult {
   return {
     status: overrides.status ?? 200,
-    headers: { 'content-type': 'application/json', 'x-request-id': 'req_live_999', date: 'now' },
+    headers: {
+      'content-type': 'application/json',
+      'x-request-id': 'req_live_999',
+      date: 'now',
+    },
     body: overrides.body ?? {
       id: 'msg_live_999',
       type: 'message',
@@ -69,7 +87,11 @@ describe('compareCase real divergence', () => {
       }),
     );
     expect(result.ok).toBe(false);
-    expect(result.diffs.some((d) => d.path.includes('output_tokens') && d.kind === 'changed')).toBe(true);
+    expect(
+      result.diffs.some(
+        (d) => d.path.includes('output_tokens') && d.kind === 'changed',
+      ),
+    ).toBe(true);
   });
 
   it('fails on a changed stop_reason', () => {
@@ -96,7 +118,10 @@ describe('compareCase real divergence', () => {
       request: { method: 'POST', url: '/v1/chat/completions', body: {} },
       expectedStream: [
         { event: 'message_start', data: { type: 'message_start' } },
-        { event: 'content_block_delta', data: { type: 'text_delta', text: '<scrubbed:5:aaaaaaaa>' } },
+        {
+          event: 'content_block_delta',
+          data: { type: 'text_delta', text: '<scrubbed:5:aaaaaaaa>' },
+        },
         { event: 'message_stop', data: { type: 'message_stop' } },
       ],
     };
@@ -106,7 +131,10 @@ describe('compareCase real divergence', () => {
       streamEvents: [
         { event: 'message_start', data: { type: 'message_start' } },
         { event: 'message_stop', data: { type: 'message_stop' } }, // swapped
-        { event: 'content_block_delta', data: { type: 'text_delta', text: 'hi' } },
+        {
+          event: 'content_block_delta',
+          data: { type: 'text_delta', text: 'hi' },
+        },
       ],
     };
     const result = compareCase(streamCase, reordered);
@@ -117,12 +145,17 @@ describe('compareCase real divergence', () => {
 
 describe('parseSse', () => {
   it('parses Anthropic-style event+data blocks', () => {
-    const raw = 'event: message_start\ndata: {"type":"message_start"}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n';
-    expect(parseSse(raw).map((e) => e.event)).toEqual(['message_start', 'message_stop']);
+    const raw =
+      'event: message_start\ndata: {"type":"message_start"}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n';
+    expect(parseSse(raw).map((e) => e.event)).toEqual([
+      'message_start',
+      'message_stop',
+    ]);
   });
 
   it('parses OpenAI-style data-only stream with [DONE]', () => {
-    const raw = 'data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n\n';
+    const raw =
+      'data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n\n';
     const events = parseSse(raw);
     expect(events[events.length - 1].event).toBe('done');
   });
@@ -145,16 +178,24 @@ describe('replay against a mock upstream', () => {
 
   async function start(): Promise<string> {
     server = createServer((_req, res) => {
-      res.writeHead(200, { 'content-type': 'application/json', 'x-request-id': 'req_srv' });
+      res.writeHead(200, {
+        'content-type': 'application/json',
+        'x-request-id': 'req_srv',
+      });
       res.end(JSON.stringify(cannedBody));
     });
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve),
+    );
     return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   }
 
   it('replays a request and reports parity pass for a matching expectation', async () => {
     const baseUrl = await start();
-    const captured = await replayCase({ name: 'legacy', baseUrl }, baseExpected);
+    const captured = await replayCase(
+      { name: 'legacy', baseUrl },
+      baseExpected,
+    );
     expect(captured.status).toBe(200);
 
     const report = await runParity({ name: 'legacy', baseUrl }, [baseExpected]);
@@ -169,11 +210,16 @@ describe('replay against a mock upstream', () => {
       name: 'anthropic/usage-mismatch',
       expectedResponse: {
         ...baseExpected.expectedResponse!,
-        body: { ...baseExpected.expectedResponse!.body as object, usage: { input_tokens: 10, output_tokens: 99 } },
+        body: {
+          ...(baseExpected.expectedResponse!.body as object),
+          usage: { input_tokens: 10, output_tokens: 99 },
+        },
       },
     };
     const report = await runParity({ name: 'legacy', baseUrl }, [mismatched]);
     expect(report.ok).toBe(false);
-    expect(report.cases[0].diffs.some((d) => d.path.includes('output_tokens'))).toBe(true);
+    expect(
+      report.cases[0].diffs.some((d) => d.path.includes('output_tokens')),
+    ).toBe(true);
   });
 });

@@ -111,7 +111,10 @@ export function scrubText(value: string): string {
   if (deSecreted.length === 0) {
     return '';
   }
-  const hash = createHash('sha256').update(deSecreted).digest('hex').slice(0, 8);
+  const hash = createHash('sha256')
+    .update(deSecreted)
+    .digest('hex')
+    .slice(0, 8);
   return `<scrubbed:${deSecreted.length}:${hash}>`;
 }
 
@@ -123,7 +126,11 @@ export function scrubText(value: string): string {
  * @param preserve when true, the value is inside a schema region: strings are
  *                 kept verbatim (secret-redacted) instead of being placeholdered
  */
-export function scrubValue(value: unknown, key?: string, preserve = false): unknown {
+export function scrubValue(
+  value: unknown,
+  key?: string,
+  preserve = false,
+): unknown {
   if (value === null || value === undefined) {
     return value;
   }
@@ -142,7 +149,9 @@ export function scrubValue(value: unknown, key?: string, preserve = false): unkn
   }
   if (typeof value === 'object') {
     const out: Record<string, unknown> = {};
-    for (const [childKey, childValue] of Object.entries(value as Record<string, unknown>)) {
+    for (const [childKey, childValue] of Object.entries(
+      value as Record<string, unknown>,
+    )) {
       const childPreserve = preserve || PRESERVE_STRUCTURE_KEYS.has(childKey);
       out[childKey] = scrubValue(childValue, childKey, childPreserve); // preserve keys
     }
@@ -165,7 +174,11 @@ const CONTENT_PLACEHOLDER_RE = /^<scrubbed:\d+:[0-9a-f]{8}>$/;
  * linter to prove content-position strings carry no raw text.
  */
 export function isScrubbedPlaceholder(value: string): boolean {
-  return value === '' || value === SECRET_PLACEHOLDER || CONTENT_PLACEHOLDER_RE.test(value);
+  return (
+    value === '' ||
+    value === SECRET_PLACEHOLDER ||
+    CONTENT_PLACEHOLDER_RE.test(value)
+  );
 }
 
 /**
@@ -194,8 +207,15 @@ export function collectContentLeaks(
     return out;
   }
   if (value !== null && typeof value === 'object') {
-    for (const [childKey, childValue] of Object.entries(value as Record<string, unknown>)) {
-      collectContentLeaks(childValue, childKey, preserve || PRESERVE_STRUCTURE_KEYS.has(childKey), out);
+    for (const [childKey, childValue] of Object.entries(
+      value as Record<string, unknown>,
+    )) {
+      collectContentLeaks(
+        childValue,
+        childKey,
+        preserve || PRESERVE_STRUCTURE_KEYS.has(childKey),
+        out,
+      );
     }
   }
   return out;
@@ -217,7 +237,9 @@ export function scrubHeaders(
     if (!HEADER_ALLOWLIST.has(name) || rawValue === undefined) {
       continue;
     }
-    const value = Array.isArray(rawValue) ? rawValue.join(', ') : String(rawValue);
+    const value = Array.isArray(rawValue)
+      ? rawValue.join(', ')
+      : String(rawValue);
     out[name] = redactSecrets(value);
   }
   return out;

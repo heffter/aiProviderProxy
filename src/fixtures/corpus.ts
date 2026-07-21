@@ -20,9 +20,21 @@
  */
 
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
-import { buildFixture, getFixtureDir, type Fixture, type RawCapture } from './recorder.js';
+import {
+  buildFixture,
+  getFixtureDir,
+  type Fixture,
+  type RawCapture,
+} from './recorder.js';
 import {
   collectContentLeaks,
   containsSecret,
@@ -30,7 +42,12 @@ import {
 } from './scrubber.js';
 
 /** The four provider corpus directories. */
-export const PROVIDER_DIRS = ['anthropic', 'openai-chat', 'gemini', 'ollama'] as const;
+export const PROVIDER_DIRS = [
+  'anthropic',
+  'openai-chat',
+  'gemini',
+  'ollama',
+] as const;
 export type ProviderDir = (typeof PROVIDER_DIRS)[number];
 
 const REQUEST_FILE = 'request.json';
@@ -131,19 +148,26 @@ export function recordExchange(
   }
   const fixture = buildFixture(raw);
   const kind = fixture.streamEvents ? 'stream' : 'unary';
-  const hash = createHash('sha256').update(JSON.stringify(fixture)).digest('hex').slice(0, 10);
+  const hash = createHash('sha256')
+    .update(JSON.stringify(fixture))
+    .digest('hex')
+    .slice(0, 10);
   return writeCorpusCase(baseDir, provider, `${kind}-${hash}`, raw);
 }
 
 /** Read a single corpus case directory back into memory. */
 export function readCorpusCase(provider: string, caseDir: string): CorpusCase {
   const requestPath = join(caseDir, REQUEST_FILE);
-  const request = JSON.parse(readFileSync(requestPath, 'utf8')) as Fixture['request'];
+  const request = JSON.parse(
+    readFileSync(requestPath, 'utf8'),
+  ) as Fixture['request'];
 
   let response: Fixture['response'] = null;
   const responsePath = join(caseDir, RESPONSE_FILE);
   if (existsSync(responsePath)) {
-    response = JSON.parse(readFileSync(responsePath, 'utf8')) as NonNullable<Fixture['response']>;
+    response = JSON.parse(readFileSync(responsePath, 'utf8')) as NonNullable<
+      Fixture['response']
+    >;
   }
 
   let streamEvents: Fixture['streamEvents'] = null;
@@ -155,10 +179,21 @@ export function readCorpusCase(provider: string, caseDir: string): CorpusCase {
       .map((line) => JSON.parse(line) as { event: string; data: unknown });
   }
 
-  return { provider, name: caseDir.split(/[\\/]/).pop() ?? caseDir, dir: caseDir, request, response, streamEvents };
+  return {
+    provider,
+    name: caseDir.split(/[\\/]/).pop() ?? caseDir,
+    dir: caseDir,
+    request,
+    response,
+    streamEvents,
+  };
 }
 
-function lintHeaders(where: string, headers: Record<string, string>, errors: string[]): void {
+function lintHeaders(
+  where: string,
+  headers: Record<string, string>,
+  errors: string[],
+): void {
   for (const name of Object.keys(headers)) {
     if (!HEADER_ALLOWLIST.has(name.toLowerCase())) {
       errors.push(`${where}: non-allowlisted header "${name}"`);
@@ -172,7 +207,9 @@ function lintScrub(where: string, value: unknown, errors: string[]): void {
   }
   const leaks = collectContentLeaks(value);
   if (leaks.length > 0) {
-    errors.push(`${where}: ${leaks.length} unscrubbed content string(s), e.g. ${JSON.stringify(leaks[0]).slice(0, 60)}`);
+    errors.push(
+      `${where}: ${leaks.length} unscrubbed content string(s), e.g. ${JSON.stringify(leaks[0]).slice(0, 60)}`,
+    );
   }
 }
 
@@ -191,7 +228,9 @@ export function lintCorpusCase(provider: string, caseDir: string): LintResult {
   const hasResponse = existsSync(join(caseDir, RESPONSE_FILE));
   const hasStream = existsSync(join(caseDir, STREAM_FILE));
   if (!hasResponse && !hasStream) {
-    errors.push(`${name}: case has neither ${RESPONSE_FILE} nor ${STREAM_FILE}`);
+    errors.push(
+      `${name}: case has neither ${RESPONSE_FILE} nor ${STREAM_FILE}`,
+    );
   }
 
   let parsed: CorpusCase;
@@ -203,7 +242,12 @@ export function lintCorpusCase(provider: string, caseDir: string): LintResult {
   }
 
   const request = parsed.request;
-  if (!request || typeof request.method !== 'string' || typeof request.url !== 'string' || !request.headers) {
+  if (
+    !request ||
+    typeof request.method !== 'string' ||
+    typeof request.url !== 'string' ||
+    !request.headers
+  ) {
     errors.push(`${name}: request is missing method/url/headers`);
   } else {
     lintHeaders(`${name}/request.headers`, request.headers, errors);

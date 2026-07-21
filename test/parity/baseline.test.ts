@@ -39,7 +39,12 @@ const anthropicCapture: RawCapture = {
     method: 'POST',
     url: '/v1/messages',
     headers: { 'content-type': 'application/json' },
-    body: { model: 'claude-sonnet-4', messages: [{ role: 'user', content: [{ type: 'text', text: 'the prompt' }] }] },
+    body: {
+      model: 'claude-sonnet-4',
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'the prompt' }] },
+      ],
+    },
   },
   response: {
     status: 200,
@@ -66,7 +71,10 @@ const streamCapture: RawCapture = {
   },
   streamEvents: [
     { event: 'message_start', data: { type: 'message_start' } },
-    { event: 'content_block_delta', data: { type: 'text_delta', text: 'Hello' } },
+    {
+      event: 'content_block_delta',
+      data: { type: 'text_delta', text: 'Hello' },
+    },
     { event: 'message_stop', data: { type: 'message_stop' } },
   ],
 };
@@ -75,7 +83,10 @@ const streamCapture: RawCapture = {
 async function startMockProxy(): Promise<string> {
   server = createServer((req, res) => {
     if (req.url?.startsWith('/v1/messages')) {
-      res.writeHead(200, { 'content-type': 'application/json', 'x-request-id': 'req_live' });
+      res.writeHead(200, {
+        'content-type': 'application/json',
+        'x-request-id': 'req_live',
+      });
       res.end(
         JSON.stringify({
           id: 'msg_live_777',
@@ -91,7 +102,9 @@ async function startMockProxy(): Promise<string> {
     // streaming chat completions
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     res.write('event: message_start\ndata: {"type":"message_start"}\n\n');
-    res.write('event: content_block_delta\ndata: {"type":"text_delta","text":"Hi there"}\n\n');
+    res.write(
+      'event: content_block_delta\ndata: {"type":"text_delta","text":"Hi there"}\n\n',
+    );
     res.write('event: message_stop\ndata: {"type":"message_stop"}\n\n');
     res.end();
   });
@@ -108,7 +121,10 @@ describe('baseline parity CI gate', () => {
 
     const cases = [
       readCorpusCase('anthropic', join(corpusDir, 'anthropic', 'plain-text')),
-      readCorpusCase('openai-chat', join(corpusDir, 'openai-chat', 'stream-text')),
+      readCorpusCase(
+        'openai-chat',
+        join(corpusDir, 'openai-chat', 'stream-text'),
+      ),
     ].map(fromCorpusCase);
 
     const target: ReplayTarget = { name: 'legacy-proxy', baseUrl };
@@ -124,15 +140,28 @@ describe('baseline parity CI gate', () => {
     const baseUrl = await startMockProxy();
 
     // Corrupt the recorded expectation: change an expected usage number.
-    const respPath = join(corpusDir, 'anthropic', 'plain-text', 'response.json');
-    const corrupted = JSON.parse(readFileSync(respPath, 'utf8')) as { body: { usage: { output_tokens: number } } };
+    const respPath = join(
+      corpusDir,
+      'anthropic',
+      'plain-text',
+      'response.json',
+    );
+    const corrupted = JSON.parse(readFileSync(respPath, 'utf8')) as {
+      body: { usage: { output_tokens: number } };
+    };
     corrupted.body.usage.output_tokens = 99;
     writeFileSync(respPath, JSON.stringify(corrupted, null, 2), 'utf8');
 
-    const cases = [fromCorpusCase(readCorpusCase('anthropic', join(corpusDir, 'anthropic', 'plain-text')))];
+    const cases = [
+      fromCorpusCase(
+        readCorpusCase('anthropic', join(corpusDir, 'anthropic', 'plain-text')),
+      ),
+    ];
     const report = await runParity({ name: 'legacy-proxy', baseUrl }, cases);
 
     expect(report.ok).toBe(false);
-    expect(report.cases[0].diffs.some((d) => d.path.includes('output_tokens'))).toBe(true);
+    expect(
+      report.cases[0].diffs.some((d) => d.path.includes('output_tokens')),
+    ).toBe(true);
   });
 });

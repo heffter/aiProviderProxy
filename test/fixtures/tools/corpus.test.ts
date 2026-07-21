@@ -3,7 +3,13 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -44,37 +50,64 @@ const unaryCapture: RawCapture = {
   request: {
     method: 'POST',
     url: '/v1/messages',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${SECRET}` },
-    body: { model: 'claude-sonnet-4-20250514', messages: [{ role: 'user', content: [{ type: 'text', text: PROMPT }] }] },
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${SECRET}`,
+    },
+    body: {
+      model: 'claude-sonnet-4-20250514',
+      messages: [{ role: 'user', content: [{ type: 'text', text: PROMPT }] }],
+    },
   },
   response: {
     status: 200,
     headers: { 'content-type': 'application/json' },
-    body: { content: [{ type: 'text', text: COMPLETION }], usage: { input_tokens: 10, output_tokens: 4 } },
+    body: {
+      content: [{ type: 'text', text: COMPLETION }],
+      usage: { input_tokens: 10, output_tokens: 4 },
+    },
   },
 };
 
 const streamingCapture: RawCapture = {
   route: '/v1/chat/completions',
   provider: 'openai-chat',
-  request: { method: 'POST', url: '/v1/chat/completions', headers: { 'content-type': 'application/json' }, body: { model: 'gpt-4o' } },
+  request: {
+    method: 'POST',
+    url: '/v1/chat/completions',
+    headers: { 'content-type': 'application/json' },
+    body: { model: 'gpt-4o' },
+  },
   streamEvents: [
     { event: 'message_start', data: { type: 'message_start' } },
-    { event: 'content_block_delta', data: { type: 'text_delta', text: COMPLETION } },
+    {
+      event: 'content_block_delta',
+      data: { type: 'text_delta', text: COMPLETION },
+    },
     { event: 'message_stop', data: { type: 'message_stop' } },
   ],
 };
 
 describe('writeCorpusCase / readCorpusCase', () => {
   it('round-trips a unary case with scrubbed content', () => {
-    const caseDir = writeCorpusCase(baseDir, 'anthropic', 'plain-text', unaryCapture);
+    const caseDir = writeCorpusCase(
+      baseDir,
+      'anthropic',
+      'plain-text',
+      unaryCapture,
+    );
     expect(existsSync(join(caseDir, 'request.json'))).toBe(true);
     expect(existsSync(join(caseDir, 'response.json'))).toBe(true);
     expect(existsSync(join(caseDir, 'stream.jsonl'))).toBe(false);
 
     const parsed = readCorpusCase('anthropic', caseDir);
-    expect(parsed.request.headers).toEqual({ 'content-type': 'application/json' }); // auth dropped
-    expect((parsed.response?.body as { usage: { input_tokens: number } }).usage.input_tokens).toBe(10);
+    expect(parsed.request.headers).toEqual({
+      'content-type': 'application/json',
+    }); // auth dropped
+    expect(
+      (parsed.response?.body as { usage: { input_tokens: number } }).usage
+        .input_tokens,
+    ).toBe(10);
 
     const serialized = JSON.stringify(parsed);
     expect(serialized).not.toContain(PROMPT);
@@ -83,7 +116,12 @@ describe('writeCorpusCase / readCorpusCase', () => {
   });
 
   it('round-trips a streaming case preserving event order', () => {
-    const caseDir = writeCorpusCase(baseDir, 'openai-chat', 'stream-text', streamingCapture);
+    const caseDir = writeCorpusCase(
+      baseDir,
+      'openai-chat',
+      'stream-text',
+      streamingCapture,
+    );
     expect(existsSync(join(caseDir, 'stream.jsonl'))).toBe(true);
     expect(existsSync(join(caseDir, 'response.json'))).toBe(false);
 
@@ -99,12 +137,21 @@ describe('writeCorpusCase / readCorpusCase', () => {
 
 describe('recordCorpusCase tap', () => {
   it('is a no-op returning null when recording is disabled', () => {
-    expect(recordCorpusCase(unaryCapture, 'anthropic', 'plain-text', null)).toBeNull();
-    expect(recordCorpusCase(unaryCapture, 'anthropic', 'plain-text')).toBeNull(); // env unset
+    expect(
+      recordCorpusCase(unaryCapture, 'anthropic', 'plain-text', null),
+    ).toBeNull();
+    expect(
+      recordCorpusCase(unaryCapture, 'anthropic', 'plain-text'),
+    ).toBeNull(); // env unset
   });
 
   it('writes a case when a base dir is provided', () => {
-    const caseDir = recordCorpusCase(unaryCapture, 'anthropic', 'plain-text', baseDir);
+    const caseDir = recordCorpusCase(
+      unaryCapture,
+      'anthropic',
+      'plain-text',
+      baseDir,
+    );
     expect(caseDir).not.toBeNull();
     expect(existsSync(join(caseDir as string, 'request.json'))).toBe(true);
   });
@@ -112,7 +159,12 @@ describe('recordCorpusCase tap', () => {
 
 describe('lintCorpusCase', () => {
   it('passes a properly scrubbed case', () => {
-    const caseDir = writeCorpusCase(baseDir, 'anthropic', 'plain-text', unaryCapture);
+    const caseDir = writeCorpusCase(
+      baseDir,
+      'anthropic',
+      'plain-text',
+      unaryCapture,
+    );
     const result = lintCorpusCase('anthropic', caseDir);
     expect(result.ok).toBe(true);
     expect(result.errors).toEqual([]);
@@ -126,17 +178,26 @@ describe('lintCorpusCase', () => {
       JSON.stringify({
         method: 'POST',
         url: '/v1/messages',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${SECRET}` },
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${SECRET}`,
+        },
         body: { messages: [{ role: 'user', content: `call ${SECRET}` }] },
       }),
       'utf8',
     );
-    writeFileSync(join(caseDir, 'response.json'), JSON.stringify({ status: 200, headers: {}, body: {} }), 'utf8');
+    writeFileSync(
+      join(caseDir, 'response.json'),
+      JSON.stringify({ status: 200, headers: {}, body: {} }),
+      'utf8',
+    );
 
     const result = lintCorpusCase('anthropic', caseDir);
     expect(result.ok).toBe(false);
     expect(result.errors.some((e) => e.includes('secret'))).toBe(true);
-    expect(result.errors.some((e) => e.includes('non-allowlisted header'))).toBe(true);
+    expect(
+      result.errors.some((e) => e.includes('non-allowlisted header')),
+    ).toBe(true);
   });
 
   it('fails a case with unscrubbed content text', () => {
@@ -148,15 +209,24 @@ describe('lintCorpusCase', () => {
         method: 'POST',
         url: '/v1/messages',
         headers: { 'content-type': 'application/json' },
-        body: { system: 'You are a helpful assistant with raw text', messages: [] },
+        body: {
+          system: 'You are a helpful assistant with raw text',
+          messages: [],
+        },
       }),
       'utf8',
     );
-    writeFileSync(join(caseDir, 'response.json'), JSON.stringify({ status: 200, headers: {}, body: {} }), 'utf8');
+    writeFileSync(
+      join(caseDir, 'response.json'),
+      JSON.stringify({ status: 200, headers: {}, body: {} }),
+      'utf8',
+    );
 
     const result = lintCorpusCase('anthropic', caseDir);
     expect(result.ok).toBe(false);
-    expect(result.errors.some((e) => e.includes('unscrubbed content'))).toBe(true);
+    expect(result.errors.some((e) => e.includes('unscrubbed content'))).toBe(
+      true,
+    );
   });
 
   it('fails a case missing both response and stream files', () => {
@@ -164,7 +234,12 @@ describe('lintCorpusCase', () => {
     mkdirSync(caseDir, { recursive: true });
     writeFileSync(
       join(caseDir, 'request.json'),
-      JSON.stringify({ method: 'POST', url: '/v1/messages', headers: {}, body: {} }),
+      JSON.stringify({
+        method: 'POST',
+        url: '/v1/messages',
+        headers: {},
+        body: {},
+      }),
       'utf8',
     );
     const result = lintCorpusCase('anthropic', caseDir);

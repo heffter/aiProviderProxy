@@ -3,7 +3,12 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { diffValues, summarize, formatReport, type CaseParity } from './report.js';
+import {
+  diffValues,
+  summarize,
+  formatReport,
+  type CaseParity,
+} from './report.js';
 
 describe('diffValues', () => {
   it('returns no diffs for deep-equal values', () => {
@@ -12,9 +17,17 @@ describe('diffValues', () => {
   });
 
   it('flags changed primitives (e.g. usage numbers)', () => {
-    const diffs = diffValues({ usage: { output_tokens: 25 } }, { usage: { output_tokens: 26 } });
+    const diffs = diffValues(
+      { usage: { output_tokens: 25 } },
+      { usage: { output_tokens: 26 } },
+    );
     expect(diffs).toHaveLength(1);
-    expect(diffs[0]).toMatchObject({ path: '$.usage.output_tokens', kind: 'changed', expected: 25, actual: 26 });
+    expect(diffs[0]).toMatchObject({
+      path: '$.usage.output_tokens',
+      kind: 'changed',
+      expected: 25,
+      actual: 26,
+    });
   });
 
   it('flags reordered array elements (event ordering)', () => {
@@ -27,13 +40,19 @@ describe('diffValues', () => {
   it('flags array length mismatch and reports extra/missing elements', () => {
     const diffs = diffValues([1, 2], [1, 2, 3]);
     expect(diffs.some((d) => d.kind === 'length')).toBe(true);
-    expect(diffs.some((d) => d.kind === 'extra' && d.path === '$[2]')).toBe(true);
+    expect(diffs.some((d) => d.kind === 'extra' && d.path === '$[2]')).toBe(
+      true,
+    );
   });
 
   it('flags missing and extra object keys', () => {
     const diffs = diffValues({ a: 1, b: 2 }, { a: 1, c: 3 });
-    expect(diffs.some((d) => d.kind === 'missing' && d.path === '$.b')).toBe(true);
-    expect(diffs.some((d) => d.kind === 'extra' && d.path === '$.c')).toBe(true);
+    expect(diffs.some((d) => d.kind === 'missing' && d.path === '$.b')).toBe(
+      true,
+    );
+    expect(diffs.some((d) => d.kind === 'extra' && d.path === '$.c')).toBe(
+      true,
+    );
   });
 
   it('flags type mismatches', () => {
@@ -45,12 +64,21 @@ describe('diffValues', () => {
 describe('summarize / formatReport', () => {
   const cases: CaseParity[] = [
     { case: 'a/ok', ok: true, diffs: [] },
-    { case: 'a/bad', ok: false, diffs: [{ path: '$.usage', kind: 'changed', expected: 1, actual: 2 }] },
+    {
+      case: 'a/bad',
+      ok: false,
+      diffs: [{ path: '$.usage', kind: 'changed', expected: 1, actual: 2 }],
+    },
   ];
 
   it('aggregates pass/fail counts', () => {
     const report = summarize('legacy', cases);
-    expect(report).toMatchObject({ target: 'legacy', totalCases: 2, okCases: 1, ok: false });
+    expect(report).toMatchObject({
+      target: 'legacy',
+      totalCases: 2,
+      okCases: 1,
+      ok: false,
+    });
   });
 
   it('renders failing cases with their diffs', () => {

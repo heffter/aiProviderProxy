@@ -23,7 +23,13 @@
     "prepublishOnly": "npm run build",
     "test:integration": "vitest run __tests__/integration/",
     "test:e2e": "vitest run test/e2e/",
-    "test:parity": "vitest run test/fixtures test/parity"
+    "test:parity": "vitest run test/fixtures test/parity",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"src/{gateway,protocols,providers,models,lifecycle,routing,integrations,ops,config,cli,fixtures}/**/*.ts\" src/identity.ts \"test/**/*.ts\"",
+    "format:check": "prettier --check \"src/{gateway,protocols,providers,models,lifecycle,routing,integrations,ops,config,cli,fixtures}/**/*.ts\" src/identity.ts \"test/**/*.ts\"",
+    "typecheck": "tsc -p tsconfig.gates.json",
+    "test:gates": "vitest run --config vitest.gates.config.ts --coverage"
   },
   "keywords": [
     "relayplane",
@@ -42,9 +48,8 @@
   "license": "MIT",
   "dependencies": {
     "@relayplane/core": "^0.1.4",
-    "fastest-levenshtein": "^1.0.16",
     "@relayplane/learning-engine": "^0.1.0",
-    "better-sqlite3": "^11.10.0",
+    "fastest-levenshtein": "^1.0.16",
     "js-yaml": "^4.1.0"
   },
   "optionalDependencies": {
@@ -57,7 +62,12 @@
   },
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",
+    "@vitest/coverage-v8": "^1.6.1",
+    "eslint": "^9.39.5",
+    "eslint-config-prettier": "^9.1.2",
+    "prettier": "^3.9.6",
     "typescript": "^5.3.3",
+    "typescript-eslint": "^8.65.0",
     "vitest": "^1.1.0"
   },
   "engines": {

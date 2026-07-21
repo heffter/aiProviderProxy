@@ -41,9 +41,25 @@ const SECRET_PLACEHOLDER = '<redacted:secret>';
 
 /** Default normalizer configuration for the proxy's response shapes. */
 export const DEFAULT_NORMALIZERS: NormalizerConfig = {
-  idKeys: ['id', 'request_id', 'requestId', 'trace_id', 'traceId', 'x_request_id', 'system_fingerprint'],
+  idKeys: [
+    'id',
+    'request_id',
+    'requestId',
+    'trace_id',
+    'traceId',
+    'x_request_id',
+    'system_fingerprint',
+  ],
   timestampKeys: ['created', 'created_at', 'createdAt', 'timestamp', 'time'],
-  latencyKeys: ['latency', 'latency_ms', 'latencyMs', 'duration', 'duration_ms', 'elapsed_ms', 'processing_ms'],
+  latencyKeys: [
+    'latency',
+    'latency_ms',
+    'latencyMs',
+    'duration',
+    'duration_ms',
+    'elapsed_ms',
+    'processing_ms',
+  ],
   idValuePatterns: [
     /^msg_[A-Za-z0-9]+$/,
     /^chatcmpl-[A-Za-z0-9]+$/,
@@ -72,7 +88,11 @@ function isScrubbedContent(value: string): boolean {
  * Recursively normalize a JSON value. `key` is the object key the value was
  * found under, which drives the id/timestamp/latency collapsing.
  */
-export function normalizeValue(value: unknown, config: NormalizerConfig, key?: string): unknown {
+export function normalizeValue(
+  value: unknown,
+  config: NormalizerConfig,
+  key?: string,
+): unknown {
   // Key-driven collapsing takes precedence over type, so a numeric `created`
   // timestamp is collapsed rather than preserved as a usage-style number.
   if (key !== undefined) {
@@ -106,7 +126,9 @@ export function normalizeValue(value: unknown, config: NormalizerConfig, key?: s
   }
   if (typeof value === 'object') {
     const out: Record<string, unknown> = {};
-    for (const [childKey, childValue] of Object.entries(value as Record<string, unknown>)) {
+    for (const [childKey, childValue] of Object.entries(
+      value as Record<string, unknown>,
+    )) {
       out[childKey] = normalizeValue(childValue, config, childKey);
     }
     return out;

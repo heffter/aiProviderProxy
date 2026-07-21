@@ -16,8 +16,19 @@ import { request as httpsRequest } from 'node:https';
 import type { IncomingHttpHeaders } from 'node:http';
 import { scrubHeaders, scrubValue } from '../fixtures/tools/scrubber.js';
 import type { CorpusCase } from '../fixtures/tools/corpus.js';
-import { DEFAULT_NORMALIZERS, normalizeHeaders, normalizeValue, type NormalizerConfig } from './normalizers.js';
-import { diffValues, summarize, type CaseParity, type Diff, type ParityReport } from './report.js';
+import {
+  DEFAULT_NORMALIZERS,
+  normalizeHeaders,
+  normalizeValue,
+  type NormalizerConfig,
+} from './normalizers.js';
+import {
+  diffValues,
+  summarize,
+  type CaseParity,
+  type Diff,
+  type ParityReport,
+} from './report.js';
 
 /** A proxy to replay against. `headers` are merged onto every request (e.g. auth). */
 export interface ReplayTarget {
@@ -38,7 +49,11 @@ export interface FixtureRequest {
 export interface ParityCase {
   name: string;
   request: FixtureRequest;
-  expectedResponse?: { status: number; headers: Record<string, string>; body: unknown } | null;
+  expectedResponse?: {
+    status: number;
+    headers: Record<string, string>;
+    body: unknown;
+  } | null;
   expectedStream?: Array<{ event: string; data: unknown }> | null;
 }
 
@@ -78,7 +93,11 @@ export function parseSse(raw: string): Array<{ event: string; data: unknown }> {
     if (event.length === 0) {
       if (dataStr === '[DONE]') {
         event = 'done';
-      } else if (data !== null && typeof data === 'object' && typeof (data as { type?: unknown }).type === 'string') {
+      } else if (
+        data !== null &&
+        typeof data === 'object' &&
+        typeof (data as { type?: unknown }).type === 'string'
+      ) {
         event = (data as { type: string }).type;
       } else {
         event = 'data';
@@ -95,21 +114,41 @@ function performRequest(
 ): Promise<{ status: number; headers: IncomingHttpHeaders; rawBody: string }> {
   const url = new URL(req.url, target.baseUrl);
   const requestFn = url.protocol === 'https:' ? httpsRequest : httpRequest;
-  const payload = req.body === undefined ? undefined : typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
-  const headers: Record<string, string> = { ...(req.headers ?? {}), ...(target.headers ?? {}) };
+  const payload =
+    req.body === undefined
+      ? undefined
+      : typeof req.body === 'string'
+        ? req.body
+        : JSON.stringify(req.body);
+  const headers: Record<string, string> = {
+    ...(req.headers ?? {}),
+    ...(target.headers ?? {}),
+  };
   if (payload !== undefined) {
     headers['content-length'] = String(Buffer.byteLength(payload));
   }
   return new Promise((resolve, reject) => {
     const clientReq = requestFn(
-      { method: req.method, hostname: url.hostname, port: url.port, path: `${url.pathname}${url.search}`, headers },
+      {
+        method: req.method,
+        hostname: url.hostname,
+        port: url.port,
+        path: `${url.pathname}${url.search}`,
+        headers,
+      },
       (res) => {
         let buf = '';
         res.setEncoding('utf8');
         res.on('data', (chunk) => {
           buf += chunk;
         });
-        res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, rawBody: buf }));
+        res.on('end', () =>
+          resolve({
+            status: res.statusCode ?? 0,
+            headers: res.headers,
+            rawBody: buf,
+          }),
+        );
       },
     );
     clientReq.on('error', reject);
@@ -121,8 +160,14 @@ function performRequest(
 }
 
 /** Replay a single case's request against `target` and capture the result. */
-export async function replayCase(target: ReplayTarget, parityCase: ParityCase): Promise<ReplayResult> {
-  const { status, headers, rawBody } = await performRequest(target, parityCase.request);
+export async function replayCase(
+  target: ReplayTarget,
+  parityCase: ParityCase,
+): Promise<ReplayResult> {
+  const { status, headers, rawBody } = await performRequest(
+    target,
+    parityCase.request,
+  );
   const contentType = String(headers['content-type'] ?? '');
   if (contentType.includes('event-stream') || parityCase.expectedStream) {
     return { status, headers, streamEvents: parseSse(rawBody) };
@@ -152,10 +197,18 @@ export function compareCase(
   if (parityCase.expectedResponse) {
     const expected = parityCase.expectedResponse;
     if (expected.status !== result.status) {
-      diffs.push({ path: '$.status', kind: 'changed', expected: expected.status, actual: result.status });
+      diffs.push({
+        path: '$.status',
+        kind: 'changed',
+        expected: expected.status,
+        actual: result.status,
+      });
     }
     const expectedHeaders = normalizeHeaders(expected.headers, config);
-    const actualHeaders = normalizeHeaders(scrubHeaders(result.headers), config);
+    const actualHeaders = normalizeHeaders(
+      scrubHeaders(result.headers),
+      config,
+    );
     diffs.push(...diffValues(expectedHeaders, actualHeaders, '$.headers'));
 
     const expectedBody = normalizeValue(expected.body, config);
@@ -166,7 +219,10 @@ export function compareCase(
   if (parityCase.expectedStream) {
     const expectedEvents = normalizeValue(parityCase.expectedStream, config);
     const actualEvents = normalizeValue(
-      (result.streamEvents ?? []).map((e) => ({ event: e.event, data: scrubValue(e.data) })),
+      (result.streamEvents ?? []).map((e) => ({
+        event: e.event,
+        data: scrubValue(e.data),
+      })),
       config,
     );
     diffs.push(...diffValues(expectedEvents, actualEvents, '$.stream'));
