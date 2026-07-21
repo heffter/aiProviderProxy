@@ -27,6 +27,7 @@
     "test/lifecycle/**/*",
     "test/ops/**/*",
     "test/providers/**/*",
+    "test/models/**/*",
     "test/skeleton.test.ts"
   ]
 }
