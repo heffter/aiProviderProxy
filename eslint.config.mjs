@@ -34,7 +34,22 @@ export default tseslint.config(
       // TypeScript resolves identifiers; no-undef would false-flag Node/DOM globals.
       'no-undef': 'off',
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+      // Route secret-bearing values through src/config/redact.ts (subtask 2.4).
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector:
+            'CallExpression[callee.object.name="JSON"][callee.property.name="stringify"][arguments.0.name=/^(config|headers|credential|credentials)$/]',
+          message:
+            'Do not JSON.stringify config/headers/credentials directly; use safeStringify from src/config/redact.ts.',
+        },
+      ],
     },
+  },
+  {
+    // The redaction utility and its tests legitimately handle raw secret shapes.
+    files: ['src/config/redact.ts', 'test/config/**/*.ts'],
+    rules: { 'no-restricted-syntax': 'off' },
   },
   prettier,
 );
