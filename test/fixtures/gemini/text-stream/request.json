@@ -1,0 +1,17 @@
+{
+  "method": "POST",
+  "url": "/v1/chat/completions",
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "model": "gemini-1.5-pro",
+    "stream": true,
+    "messages": [
+      {
+        "role": "user",
+        "content": "<scrubbed:9:01da6ddb>"
+      }
+    ]
+  }
+}

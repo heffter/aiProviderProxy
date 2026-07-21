@@ -1,0 +1,27 @@
+{
+  "status": 200,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "id": "<scrubbed:12:36fdd9f7>",
+    "object": "chat.completion",
+    "created": 1700000004,
+    "model": "llama3.1",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "<scrubbed:2:2689367b>"
+        },
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 6,
+      "completion_tokens": 1,
+      "total_tokens": 7
+    }
+  }
+}

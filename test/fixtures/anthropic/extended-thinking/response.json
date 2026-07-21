@@ -1,0 +1,26 @@
+{
+  "status": 200,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "id": "<scrubbed:9:7058549c>",
+    "type": "message",
+    "role": "assistant",
+    "content": [
+      {
+        "type": "thinking",
+        "thinking": "<scrubbed:37:004efba7>"
+      },
+      {
+        "type": "text",
+        "text": "<scrubbed:40:cc4e199f>"
+      }
+    ],
+    "stop_reason": "end_turn",
+    "usage": {
+      "input_tokens": 25,
+      "output_tokens": 120
+    }
+  }
+}

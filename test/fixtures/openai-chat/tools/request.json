@@ -1,0 +1,32 @@
+{
+  "method": "POST",
+  "url": "/v1/chat/completions",
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "model": "gpt-4o",
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "get_time",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "tz": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    ],
+    "messages": [
+      {
+        "role": "user",
+        "content": "<scrubbed:23:59637442>"
+      }
+    ]
+  }
+}

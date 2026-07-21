@@ -1,0 +1,27 @@
+{
+  "status": 200,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "id": "<scrubbed:12:aa95f0e7>",
+    "object": "chat.completion",
+    "created": 1700000003,
+    "model": "gemini-1.5-pro",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "<scrubbed:5:2ae2753e>"
+        },
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 8,
+      "completion_tokens": 2,
+      "total_tokens": 10
+    }
+  }
+}

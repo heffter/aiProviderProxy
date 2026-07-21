@@ -1,0 +1,28 @@
+{
+  "method": "POST",
+  "url": "/v1/messages",
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "model": "claude-sonnet-4-20250514",
+    "max_tokens": 512,
+    "system": [
+      {
+        "type": "text",
+        "text": "<scrubbed:26:0b819619>"
+      }
+    ],
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "<scrubbed:19:c6bbb773>"
+          }
+        ]
+      }
+    ]
+  }
+}

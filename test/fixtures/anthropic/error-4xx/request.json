@@ -1,0 +1,11 @@
+{
+  "method": "POST",
+  "url": "/v1/messages",
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "model": "claude-sonnet-4-20250514",
+    "messages": []
+  }
+}

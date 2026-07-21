@@ -1,0 +1,17 @@
+{
+  "method": "POST",
+  "url": "/v1/chat/completions",
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "model": "gpt-4o",
+    "stream": true,
+    "messages": [
+      {
+        "role": "user",
+        "content": "<scrubbed:13:da165b36>"
+      }
+    ]
+  }
+}

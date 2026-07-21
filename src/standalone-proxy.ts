@@ -38,6 +38,9 @@ type Provider = CoreProvider
   | 'perplexity'
   | 'ollama';
 import { buildModelNotFoundError } from './utils/model-suggestions.js';
+// Fixture recording tap (epic AIPP-1). Opt-in via AIPP_RECORD_FIXTURES; no-op otherwise.
+import { isRecordingEnabled } from './fixtures/recorder.js';
+import { recordExchange } from './fixtures/corpus.js';
 import { recordTelemetry as recordCloudTelemetry, inferTaskType as inferTelemetryTaskType, estimateCost, queueForUpload } from './telemetry.js';
 import { maybeFireActivated, maybeSendSessionHeartbeat } from './lifecycle-telemetry.js';
 import { loadConfig as loadUserConfig, hasValidCredentials, getMeshConfig, getDeviceId, isTelemetryEnabled } from './config.js';
@@ -6063,6 +6066,32 @@ export async function startProxy(config: ProxyConfig = {}): Promise<http.Server>
         const nativeTokOut = nativeUsageData?.output_tokens ?? nativeUsageData?.completion_tokens ?? 0;
         const nativeCacheCreation = nativeUsageData?.cache_creation_input_tokens ?? 0;
         const nativeCacheRead = nativeUsageData?.cache_read_input_tokens ?? 0;
+
+        // Fixture recording tap (epic AIPP-1). Opt-in and best-effort: only runs
+        // when AIPP_RECORD_FIXTURES is set, only for non-streaming responses
+        // (nativeResponseData holds the full body then), and any failure is
+        // swallowed so recording can never affect the proxied response.
+        if (isRecordingEnabled() && !requestBody['stream'] && nativeResponseData) {
+          try {
+            recordExchange(
+              {
+                route: '/v1/messages',
+                provider: 'anthropic',
+                request: {
+                  method: req.method ?? 'POST',
+                  url,
+                  headers: req.headers as Record<string, string | string[] | undefined>,
+                  body: requestBody,
+                },
+                response: { status: 200, headers: {}, body: nativeResponseData },
+                usage: nativeUsageData,
+              },
+              'anthropic',
+            );
+          } catch {
+            // fixture recording is best-effort and must never affect the proxy
+          }
+        }
         // Include cache tokens in displayed/recorded token count
         const nativeTokIn = nativeBaseTokIn + nativeCacheCreation + nativeCacheRead;
         // Cost calculation expects inputTokens to include cache tokens when cache params are provided

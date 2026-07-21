@@ -1,0 +1,12 @@
+{
+  "status": 429,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "error": {
+      "message": "<scrubbed:18:06946279>",
+      "type": "rate_limit_error"
+    }
+  }
+}

@@ -1,0 +1,4 @@
+{"event":"chat.completion.chunk","data":{"id":"<scrubbed:12:7e85a4b8>","object":"chat.completion.chunk","created":1700000002,"model":"gpt-4o","choices":[{"index":0,"delta":{"role":"assistant","content":"<scrubbed:3:8b125077>"},"finish_reason":null}]}}
+{"event":"chat.completion.chunk","data":{"id":"<scrubbed:12:7e85a4b8>","object":"chat.completion.chunk","created":1700000002,"model":"gpt-4o","choices":[{"index":0,"delta":{"content":"<scrubbed:4:6ac91056>"},"finish_reason":null}]}}
+{"event":"chat.completion.chunk","data":{"id":"<scrubbed:12:7e85a4b8>","object":"chat.completion.chunk","created":1700000002,"model":"gpt-4o","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}}
+{"event":"done","data":"<scrubbed:6:7073e6d8>"}

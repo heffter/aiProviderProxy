@@ -1,0 +1,62 @@
+{
+  "method": "POST",
+  "url": "/v1/messages",
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "model": "claude-sonnet-4-20250514",
+    "max_tokens": 1024,
+    "tools": [
+      {
+        "name": "get_weather",
+        "description": "Get current weather",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "location": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "location"
+          ]
+        }
+      }
+    ],
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "<scrubbed:29:d3668ffc>"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "<scrubbed:7:4838a0c2>",
+            "name": "get_weather",
+            "input": {
+              "location": "<scrubbed:5:5dd272b4>"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "<scrubbed:7:4838a0c2>",
+            "content": "<scrubbed:10:b4cd56ed>"
+          }
+        ]
+      }
+    ]
+  }
+}
