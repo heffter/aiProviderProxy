@@ -1,9 +1,9 @@
 /**
- * Request lifecycle telemetry and event emission.
- *
- * Target-skeleton placeholder (epic AIPP-2, PRD section 10.1). Implementation
- * lands in later AIPP epics; this barrel fixes the module boundary and name.
+ * Request lifecycle telemetry and event emission (epic AIPP-3).
  */
+
+export * from './attempt.js';
+export * from './request-context.js';
 
 /** Identifies this module within the target skeleton. */
 export const MODULE_NAME = 'lifecycle';

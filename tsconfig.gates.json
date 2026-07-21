@@ -24,6 +24,7 @@
     "test/parity/**/*",
     "test/config/**/*",
     "test/cli/**/*",
+    "test/lifecycle/**/*",
     "test/skeleton.test.ts"
   ]
 }

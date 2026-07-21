@@ -14,6 +14,7 @@ export default defineConfig({
       'test/parity/**/*.test.ts',
       'test/config/**/*.test.ts',
       'test/cli/**/*.test.ts',
+      'test/lifecycle/**/*.test.ts',
       'test/skeleton.test.ts',
     ],
     coverage: {
