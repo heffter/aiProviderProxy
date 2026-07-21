@@ -4,6 +4,7 @@
 
 export * from './types.js';
 export * from './registry.js';
+export * from './errors.js';
 
 /** Identifies this module within the target skeleton. */
 export const MODULE_NAME = 'providers';
