@@ -29,6 +29,7 @@
     "test/providers/**/*",
     "test/integrations/**/*",
     "test/protocols/**/*",
+    "test/gateway/**/*",
     "test/models/**/*",
     "test/skeleton.test.ts"
   ]

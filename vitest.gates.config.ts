@@ -25,6 +25,7 @@ export default defineConfig({
       'test/providers/**/*.test.ts',
       'test/integrations/**/*.test.ts',
       'test/protocols/**/*.test.ts',
+      'test/gateway/**/*.test.ts',
       'test/models/**/*.test.ts',
       'test/skeleton.test.ts',
     ],
