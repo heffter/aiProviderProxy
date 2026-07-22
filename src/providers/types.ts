@@ -86,6 +86,8 @@ export interface CanonicalProviderRequest {
   body: Record<string, unknown>;
   /** Extra headers to merge (e.g. passthrough auth). */
   headers?: Record<string, string>;
+  /** Which upstream protocol to target when an adapter speaks more than one. */
+  upstreamProtocol?: UpstreamProtocol;
 }
 
 /** Token usage extracted from a provider response. */
