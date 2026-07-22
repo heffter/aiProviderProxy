@@ -23,6 +23,7 @@ export default defineConfig({
       'test/lifecycle/**/*.test.ts',
       'test/ops/**/*.test.ts',
       'test/providers/**/*.test.ts',
+      'test/integrations/**/*.test.ts',
       'test/models/**/*.test.ts',
       'test/skeleton.test.ts',
     ],

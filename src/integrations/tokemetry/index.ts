@@ -1,9 +1,8 @@
 /**
- * Tokemetry usage-export integration.
- *
- * Target-skeleton placeholder (epic AIPP-2, PRD section 10.1). Implementation
- * lands in later AIPP epics; this barrel fixes the module boundary and name.
+ * Tokemetry usage-export integration (epic AIPP-5).
  */
+
+export * from './outbox.js';
 
 /** Identifies this module within the target skeleton. */
 export const MODULE_NAME = 'tokemetry';
