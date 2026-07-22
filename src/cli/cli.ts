@@ -28,6 +28,7 @@ import {
   exporterHealth,
   formatExporterHealth,
 } from '../integrations/tokemetry/index.js';
+import { buildProviderRegistry, createGateway } from '../gateway/index.js';
 
 /** Commands available on the new CLI surface. */
 export const COMMANDS = [
@@ -64,6 +65,31 @@ export interface CliDeps {
   configFile?: string;
   /** Opens the Tokemetry outbox; injected in tests. */
   openTokemetryOutbox?: () => TokemetryOutbox;
+  /** Boots the gateway for `start`; injected in tests. Resolves when it stops. */
+  startGateway?: (io: CliIO, configFile?: string) => Promise<number>;
+}
+
+/** Default gateway boot: load config, build the registry, and listen. */
+async function defaultStartGateway(
+  io: CliIO,
+  configFile?: string,
+): Promise<number> {
+  const { config, warnings } = loadConfig(configFile);
+  for (const w of warnings) {
+    io.err(`warning: ${w}`);
+  }
+  const gateway = createGateway({
+    config,
+    registry: buildProviderRegistry(),
+  });
+  const { host, port } = await gateway.listen();
+  io.out(`aiproviderproxy gateway listening on http://${host}:${port}`);
+  // Resolve only when the process is asked to stop.
+  return new Promise<number>((resolve) => {
+    const stop = (): void => resolve(0);
+    process.once('SIGINT', stop);
+    process.once('SIGTERM', stop);
+  });
 }
 
 function defaultIO(): CliIO {
@@ -113,16 +139,14 @@ function cmdVersion(io: CliIO): number {
 async function cmdStart(
   args: string[],
   io: CliIO,
-  runLegacy: (args: string[]) => Promise<number>,
+  deps: CliDeps,
 ): Promise<number> {
+  const runLegacy = deps.runLegacy ?? defaultRunLegacy;
   if (args.includes('--legacy')) {
     return runLegacy(args.filter((a) => a !== '--legacy'));
   }
-  io.out(
-    'The aiproviderproxy gateway is not implemented yet (lands in AIPP-3+). ' +
-      'Run "aipp start --legacy" to start the legacy proxy.',
-  );
-  return 0;
+  const start = deps.startGateway ?? defaultStartGateway;
+  return start(io, deps.configFile);
 }
 
 function cmdConfigShow(io: CliIO, file: string): number {
@@ -211,7 +235,6 @@ export async function runCli(
   deps: CliDeps = {},
 ): Promise<number> {
   const io = deps.io ?? defaultIO();
-  const runLegacy = deps.runLegacy ?? defaultRunLegacy;
   const file = deps.configFile ?? configPath();
 
   const [command, ...args] = argv;
@@ -237,7 +260,7 @@ export async function runCli(
   }
   switch (command) {
     case 'start':
-      return cmdStart(args, io, runLegacy);
+      return cmdStart(args, io, deps);
     case 'config':
       if (args[0] === 'show') {
         return cmdConfigShow(io, file);

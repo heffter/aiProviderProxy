@@ -35,9 +35,18 @@ afterEach(() => {
 });
 
 const stubLegacy = vi.fn(async () => 0);
+const stubStartGateway = vi.fn(async (sink: CliIO) => {
+  sink.out('gateway started (stub)');
+  return 0;
+});
 
 function run(argv: string[]): Promise<number> {
-  return runCli(argv, { io, configFile, runLegacy: stubLegacy });
+  return runCli(argv, {
+    io,
+    configFile,
+    runLegacy: stubLegacy,
+    startGateway: stubStartGateway,
+  });
 }
 
 describe('help and version', () => {
@@ -74,16 +83,20 @@ describe('removed cloud commands', () => {
 });
 
 describe('start', () => {
-  it('prints a placeholder for the new gateway and does not run legacy', async () => {
+  it('boots the gateway and does not run legacy', async () => {
+    stubStartGateway.mockClear();
+    stubLegacy.mockClear();
     expect(await run(['start'])).toBe(0);
-    expect(out.join('\n')).toContain('not implemented yet');
+    expect(stubStartGateway).toHaveBeenCalled();
     expect(stubLegacy).not.toHaveBeenCalled();
   });
 
   it('delegates to the legacy runner with --legacy', async () => {
     stubLegacy.mockClear();
+    stubStartGateway.mockClear();
     expect(await run(['start', '--legacy', '--port', '4100'])).toBe(0);
     expect(stubLegacy).toHaveBeenCalledWith(['--port', '4100']);
+    expect(stubStartGateway).not.toHaveBeenCalled();
   });
 });
 
@@ -197,7 +210,12 @@ describe('network egress guard', () => {
       ['frobnicate'],
     ];
     for (const argv of invocations) {
-      await runCli(argv, { io, configFile, runLegacy: stubLegacy });
+      await runCli(argv, {
+        io,
+        configFile,
+        runLegacy: stubLegacy,
+        startGateway: stubStartGateway,
+      });
     }
     expect(fetchSpy).not.toHaveBeenCalled();
   });
