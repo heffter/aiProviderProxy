@@ -28,6 +28,7 @@
     "test/ops/**/*",
     "test/providers/**/*",
     "test/integrations/**/*",
+    "test/protocols/**/*",
     "test/models/**/*",
     "test/skeleton.test.ts"
   ]
