@@ -14,6 +14,7 @@ import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { BIN_NAME, DISPLAY_NAME, PRODUCT_NAME } from '../identity.js';
 import {
+  configHome,
   configPath,
   loadConfig,
   saveConfig,
@@ -22,12 +23,18 @@ import {
   migrateFromRelayplane,
   formatMigrationResult,
 } from '../config/index.js';
+import {
+  TokemetryOutbox,
+  exporterHealth,
+  formatExporterHealth,
+} from '../integrations/tokemetry/index.js';
 
 /** Commands available on the new CLI surface. */
 export const COMMANDS = [
   'start',
   'config',
   'content-log',
+  'tokemetry',
   'migrate-from-relayplane',
   'version',
   'help',
@@ -55,6 +62,8 @@ export interface CliDeps {
   runLegacy?: (args: string[]) => Promise<number>;
   /** Config file path override (else resolved from env). */
   configFile?: string;
+  /** Opens the Tokemetry outbox; injected in tests. */
+  openTokemetryOutbox?: () => TokemetryOutbox;
 }
 
 function defaultIO(): CliIO {
@@ -89,6 +98,7 @@ function helpText(): string {
     '  start [--legacy]          Start the gateway (--legacy runs the old proxy)',
     '  config show               Print the effective config with secrets redacted',
     '  content-log on|off|status Toggle or show request/response content logging',
+    '  tokemetry status|dlq      Show exporter health or dead-lettered events',
     '  migrate-from-relayplane   Import an existing ~/.relayplane install',
     '  version                   Print the version',
     '  help                      Show this help',
@@ -151,6 +161,36 @@ function cmdContentLog(args: string[], io: CliIO, file: string): number {
   }
 }
 
+function cmdTokemetry(args: string[], io: CliIO, deps: CliDeps): number {
+  const sub = args[0];
+  if (sub !== 'status' && sub !== 'dlq') {
+    io.err('usage: aipp tokemetry status|dlq');
+    return 2;
+  }
+  const outbox =
+    deps.openTokemetryOutbox?.() ??
+    new TokemetryOutbox({ path: join(configHome(), 'tokemetry-outbox.db') });
+  try {
+    if (sub === 'status') {
+      io.out(formatExporterHealth(exporterHealth(outbox)));
+    } else {
+      const dead = outbox.deadLetters();
+      io.out(`${dead.length} dead-lettered event(s)`);
+      for (const row of dead.slice(0, 50)) {
+        io.out(`  ${row.event_id}  ${row.last_error ?? ''}`);
+      }
+    }
+    return 0;
+  } catch (err) {
+    io.err(`error: ${redactError(err)}`);
+    return 1;
+  } finally {
+    if (!deps.openTokemetryOutbox) {
+      outbox.close();
+    }
+  }
+}
+
 function cmdMigrate(args: string[], io: CliIO): number {
   try {
     const result = migrateFromRelayplane({ force: args.includes('--force') });
@@ -206,6 +246,8 @@ export async function runCli(
       return 2;
     case 'content-log':
       return cmdContentLog(args, io, file);
+    case 'tokemetry':
+      return cmdTokemetry(args, io, deps);
     case 'migrate-from-relayplane':
       return cmdMigrate(args, io);
     default:
