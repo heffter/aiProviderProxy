@@ -13,6 +13,7 @@
  */
 
 import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import type { Config } from '../config/index.js';
 import {
   RequestContext,
@@ -382,7 +383,8 @@ export class Gateway {
     await new Promise<void>((resolve) =>
       this.server!.listen(port, host, resolve),
     );
-    return { host, port };
+    const address = this.server.address() as AddressInfo | null;
+    return { host, port: address?.port ?? port };
   }
 
   close(): void {

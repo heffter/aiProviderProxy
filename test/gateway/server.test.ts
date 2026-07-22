@@ -166,6 +166,56 @@ describe('translated OpenAI path', () => {
   });
 });
 
+describe('real HTTP boot (listen)', () => {
+  it('binds a socket and serves /health and /v1/messages', async () => {
+    const anthropicResponse = {
+      id: 'msg_live',
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'text', text: 'live' }],
+      stop_reason: 'end_turn',
+      usage: { input_tokens: 3, output_tokens: 1 },
+    };
+    const transport: Transport = async () => ({
+      status: 200,
+      headers: { 'request-id': 'req_live' },
+      body: JSON.stringify(anthropicResponse),
+    });
+    const gateway = createGateway({
+      // bind an ephemeral port for the test
+      config: {
+        ...defaultConfig(),
+        server: { ...defaultConfig().server, port: 0 },
+      },
+      registry: buildProviderRegistry({ env }),
+      transport,
+    });
+    const { host, port } = await gateway.listen();
+    try {
+      const health = await fetch(`http://${host}:${port}/health`);
+      expect(health.status).toBe(200);
+      expect(await health.json()).toMatchObject({ status: 'ok' });
+
+      const messages = await fetch(`http://${host}:${port}/v1/messages`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4',
+          max_tokens: 16,
+          messages: [{ role: 'user', content: 'hi' }],
+        }),
+      });
+      expect(messages.status).toBe(200);
+      expect(await messages.json()).toMatchObject({
+        id: 'msg_live',
+        stop_reason: 'end_turn',
+      });
+    } finally {
+      gateway.close();
+    }
+  });
+});
+
 describe('errors', () => {
   it('returns a 400 invalid_request_error on a bad request', async () => {
     const { gateway } = harness(async () => ({
