@@ -99,6 +99,7 @@ import {
   glmReasoningToAnthropicBlock,
 } from '../providers/zai/index.js';
 import { ToolAuthorizer, decideToolEnforcement } from '../tools/index.js';
+import type { BudgetManager } from '../ops/budget/index.js';
 import {
   EstimateRateLimiter,
   estimateChat,
@@ -135,10 +136,16 @@ export interface GatewayDeps {
   modelRegistry?: ModelRegistry;
   /**
    * Current budget utilisation percent (0-100+), consulted for budget
-   * downgrade. Defaults to 0 (never downgrades). The budget ledger wiring lands
-   * with the budget subsystem; this seam keeps downgrade testable and decoupled.
+   * downgrade. Defaults to the injected {@link budget} ledger's daily percent,
+   * else 0 (never downgrades).
    */
   budgetPercent?: () => number;
+  /**
+   * The unified budget ledger. When present and enabled, a breaching pre-request
+   * check with a `block` action rejects the request with a budget_exceeded
+   * outcome; its daily percent also feeds the downgrade seam by default.
+   */
+  budget?: BudgetManager;
   /**
    * Ordered account labels available for a provider, used for token-pool
    * account rotation on an auth failure. Defaults to none (no rotation). The
@@ -661,9 +668,12 @@ export class Gateway {
     this.emitEvent('attempt', ctx, attempt, input);
   }
 
-  /** Current budget utilisation percent (0 when no source is wired). */
+  /** Current budget utilisation percent (ledger daily percent, else 0). */
   private budgetPercent(): number {
-    return this.deps.budgetPercent?.() ?? 0;
+    if (this.deps.budgetPercent) {
+      return this.deps.budgetPercent();
+    }
+    return this.deps.budget?.dailyPercent() ?? 0;
   }
 
   /** Ordered account labels for a provider (empty when rotation is unavailable). */
@@ -890,6 +900,33 @@ export class Gateway {
       primaryHop,
       ...route.fallbacks.map((f) => ({ provider: f.provider, model: f.model })),
     ];
+
+    // Budget gate: a breaching pre-request check with a `block` action rejects
+    // before any dispatch (budget_exceeded outcome). Other breach actions
+    // (warn/downgrade/alert) allow the request through; downgrade is handled by
+    // the budgetPercent seam above.
+    if (this.deps.budget) {
+      const budget = this.deps.budget.check();
+      if (!budget.allowed) {
+        const attempt = ctx.startAttempt({
+          provider: primaryHop.provider,
+          upstreamProtocol:
+            primaryHop.provider === 'anthropic' ? 'anthropic' : 'openai_chat',
+          routedModel: primaryHop.model,
+          nativeModel: primaryHop.model,
+          routing: this.hopRouting(route, primaryHop),
+        });
+        attempt.complete('policy_rejected');
+        ctx.complete('policy_rejected');
+        this.emit(ctx, attempt, { success: false, outcome: 'budget_exceeded' });
+        return errorResponse(
+          anthropicError(
+            'rate_limit_error',
+            `Budget exceeded (${budget.breachType} limit); request blocked.`,
+          ),
+        );
+      }
+    }
 
     // Tool authorization runs once (pack policy is provider-agnostic) against a
     // primary attempt so a full denial is recorded and returned before dispatch.

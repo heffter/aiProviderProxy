@@ -166,10 +166,22 @@ export const routingSchema = z
   })
   .passthrough();
 
+/**
+ * Unified budget enforcement (epic AIPP-11, subtask 11.2). One daily/hourly/
+ * per-request spend ceiling with a breach action; replaces the two overlapping
+ * legacy trackers.
+ */
 export const budgetSchema = z
   .object({
     enabled: z.boolean().default(false),
-    dailyUsd: z.number().nonnegative().optional(),
+    dailyUsd: z.number().nonnegative().default(50),
+    hourlyUsd: z.number().nonnegative().default(10),
+    perRequestUsd: z.number().nonnegative().default(2),
+    onBreach: z
+      .enum(['block', 'warn', 'downgrade', 'alert'])
+      .default('downgrade'),
+    downgradeTo: z.string().default('claude-sonnet-4-6'),
+    alertThresholds: z.array(z.number()).default([50, 80, 95]),
   })
   .passthrough();
 
