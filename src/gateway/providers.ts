@@ -11,6 +11,7 @@ import { createAnthropicAdapter } from '../providers/anthropic/index.js';
 import { createOpenAIAdapter } from '../providers/openai/index.js';
 import { createGoogleAdapter } from '../providers/google/index.js';
 import { createOllamaAdapter } from '../providers/ollama/index.js';
+import { createZaiAdapter } from '../providers/zai/index.js';
 import { registerOpenAICompatibleProviders } from '../providers/openai-compatible.js';
 import { ProviderRegistry } from '../providers/registry.js';
 import type { TokenPool } from '../providers/anthropic/index.js';
@@ -32,6 +33,7 @@ export function buildProviderRegistry(
   registry.register(createOpenAIAdapter({ env }));
   registry.register(createGoogleAdapter({ env }));
   registry.register(createOllamaAdapter());
+  registry.register(createZaiAdapter({ env }));
   registerOpenAICompatibleProviders(registry, { env });
   return registry;
 }
