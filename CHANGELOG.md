@@ -1,5 +1,59 @@
 # Changelog
 
+## 2.0.0
+
+The greenfield rewrite. aiproviderproxy replaces the legacy RelayPlane proxy: a
+local, multi-protocol AI gateway with no cloud account and no phone-home. The
+package is renamed to `aiproviderproxy` and the CLI to `aipp`.
+
+### Added
+
+- **Three client surfaces on one listener** — Anthropic Messages, OpenAI
+  Responses (Codex), and OpenAI Chat Completions, with cross-protocol
+  translation.
+- **Providers** — Anthropic, OpenAI, Google (Gemini), Ollama, Z.ai (GLM), and
+  eight OpenAI-compatible providers, behind a capability-aware model registry.
+- **Routing** — passthrough / standard / complexity / auto / cascade modes,
+  capability-preserving fallback, pre-stream retry with backoff, provider
+  cooldowns, budget downgrade, account rotation, and an optional agent-routing
+  policy with an offline replay tool. Every fallback is a distinct, observable,
+  linked lifecycle event.
+- **Local subsystems** — dashboard with an exporter-health panel, unified
+  budget enforcement, alerts and anomaly detection, an exact-match response
+  cache (cache hits excluded from export), a local-only mesh/memory store, and
+  content-log governance.
+- **Tokemetry export (optional, off by default)** — content-free usage metadata
+  to a single endpoint via a durable commit-before-export outbox with
+  deduplication.
+- **Security** — SSRF base-URL validation, header allowlists, constant-time
+  token comparison, owner-only state-file permissions, request size / JSON-depth
+  limits, redaction on every diagnostic path, and an egress-allowlist test.
+- **Operations** — `aipp` CLI (start, config, content-log, tokemetry, policy,
+  alerts, cache, mesh, service, migrate-from-relayplane); run-at-boot service
+  templates for systemd, launchd, and Windows Scheduled Tasks.
+
+### Changed
+
+- Two documented parity differences from the legacy proxy (both improvements):
+  cache-read tokens are preserved into usage, and Anthropic thinking blocks
+  surface a counts-only diagnostics header instead of being dropped.
+
+### Removed
+
+- The legacy standalone proxy, all RelayPlane cloud integration, remote
+  mesh/osmosis sync, telemetry pings, and signup/star nudges.
+- The RelayPlane-scoped npm dependencies; `better-sqlite3` is now a direct
+  dependency.
+
+### Security
+
+- `npm audit` (production) and `trivy fs` report no HIGH/CRITICAL findings.
+
+### Migration
+
+- `aipp migrate-from-relayplane` imports an existing `~/.relayplane` install. The
+  old state directory is left untouched for rollback. See `docs/migration.md`.
+
 ## v1.9.0 (2026-04-02)
 
 ### Features

@@ -1,6 +1,6 @@
 {
   "name": "aiproviderproxy",
-  "version": "1.9.38",
+  "version": "2.0.0",
   "private": true,
   "description": "Local multi-protocol AI gateway (aipp): Anthropic Messages and OpenAI Chat Completions across providers, with routing, redaction, and usage export.",
   "repository": {
