@@ -10,6 +10,7 @@
 import { createAnthropicAdapter } from '../providers/anthropic/index.js';
 import { createOpenAIAdapter } from '../providers/openai/index.js';
 import { createGoogleAdapter } from '../providers/google/index.js';
+import { createOllamaAdapter } from '../providers/ollama/index.js';
 import { registerOpenAICompatibleProviders } from '../providers/openai-compatible.js';
 import { ProviderRegistry } from '../providers/registry.js';
 import type { TokenPool } from '../providers/anthropic/index.js';
@@ -30,8 +31,7 @@ export function buildProviderRegistry(
   );
   registry.register(createOpenAIAdapter({ env }));
   registry.register(createGoogleAdapter({ env }));
+  registry.register(createOllamaAdapter());
   registerOpenAICompatibleProviders(registry, { env });
-  // Note: the ollama adapter lands in subtask 8.4; until then a request routed
-  // to it is a clean "unknown provider" error, never a misroute.
   return registry;
 }

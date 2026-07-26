@@ -226,6 +226,47 @@ describe('Gemini-translated chat path', () => {
   });
 });
 
+describe('Ollama-translated chat path', () => {
+  const ollamaResponse = {
+    model: 'llama3.1',
+    message: { role: 'assistant', content: 'Hi from Ollama.' },
+    done: true,
+    done_reason: 'stop',
+    prompt_eval_count: 6,
+    eval_count: 4,
+  };
+
+  it('routes to /api/chat and returns a chat.completion', async () => {
+    const transport: Transport = async (req) => {
+      expect(req.url).toBe('http://127.0.0.1:11434/api/chat');
+      const sent = JSON.parse(req.body ?? '{}');
+      expect(sent.model).toBe('llama3.1');
+      expect(sent.stream).toBe(false); // translated path is non-streaming upstream
+      return { status: 200, headers: {}, body: JSON.stringify(ollamaResponse) };
+    };
+    const { gateway, events } = harness(transport);
+    const res = await gateway.handle(post('ollama/llama3.1'));
+
+    expect(res.status).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.object).toBe('chat.completion');
+    expect(body.model).toBe('llama3.1');
+    expect(body.choices[0].message).toEqual({
+      role: 'assistant',
+      content: 'Hi from Ollama.',
+    });
+    expect(body.usage).toMatchObject({
+      prompt_tokens: 6,
+      completion_tokens: 4,
+    });
+    expect(events[0]).toMatchObject({
+      provider: 'ollama',
+      inputTokens: 6,
+      outputTokens: 4,
+    });
+  });
+});
+
 describe('tool-router authorization', () => {
   function toolPost(names: string[]): GatewayRequest {
     return post('gpt-4o', {
