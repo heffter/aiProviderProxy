@@ -87,6 +87,63 @@ export function renderChatUsage(
   return out;
 }
 
+/**
+ * Reduce a `chat.completion` object back to a canonical result. Used to serve a
+ * streaming client from an upstream that produced a single (translated)
+ * completion object -- the object is turned into a canonical result and then
+ * re-emitted as a chunk stream.
+ */
+export function chatCompletionToCanonical(body: unknown): CanonicalChatResult {
+  const b = (body ?? {}) as {
+    id?: string;
+    model?: string;
+    choices?: Array<{
+      finish_reason?: string;
+      message?: {
+        content?: string | null;
+        tool_calls?: Array<{
+          id?: string;
+          function?: { name?: string; arguments?: string };
+        }>;
+      };
+    }>;
+    usage?: {
+      prompt_tokens?: number;
+      completion_tokens?: number;
+      prompt_tokens_details?: { cached_tokens?: number };
+      completion_tokens_details?: { reasoning_tokens?: number };
+    };
+  };
+  const choice = b.choices?.[0];
+  const message = choice?.message;
+  const toolCalls: CanonicalToolCall[] = (message?.tool_calls ?? []).map(
+    (call) => ({
+      id: String(call.id ?? ''),
+      name: String(call.function?.name ?? ''),
+      arguments: String(call.function?.arguments ?? ''),
+    }),
+  );
+  const usage: CanonicalChatUsage | undefined = b.usage
+    ? {
+        promptTokens: b.usage.prompt_tokens ?? 0,
+        completionTokens: b.usage.completion_tokens ?? 0,
+        cachedTokens: b.usage.prompt_tokens_details?.cached_tokens,
+        reasoningTokens: b.usage.completion_tokens_details?.reasoning_tokens,
+      }
+    : undefined;
+  return {
+    id: b.id,
+    model: String(b.model ?? ''),
+    finishReason: choice?.finish_reason ?? 'stop',
+    text:
+      typeof message?.content === 'string' && message.content.length > 0
+        ? message.content
+        : undefined,
+    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+    usage,
+  };
+}
+
 /** Build a spec-valid non-streaming `chat.completion` object. */
 export function buildChatCompletion(
   result: CanonicalChatResult,

@@ -14,6 +14,8 @@ import {
   type GatewayRequest,
 } from '../../src/gateway/server.js';
 import { buildProviderRegistry } from '../../src/gateway/providers.js';
+import { ProviderRegistry } from '../../src/providers/registry.js';
+import { createAnthropicAdapter } from '../../src/providers/anthropic/index.js';
 import { defaultConfig } from '../../src/config/index.js';
 import { EventSinkRegistry } from '../../src/lifecycle/index.js';
 import { TokemetryOutbox } from '../../src/integrations/tokemetry/index.js';
@@ -424,12 +426,15 @@ describe('errors', () => {
   });
 
   it('rejects an unregistered provider without misrouting', async () => {
-    // gemini-* resolves to the google provider, which is not registered.
-    const { gateway } = harness(async () => ({
-      status: 200,
-      headers: {},
-      body: '{}',
-    }));
+    // A registry with only Anthropic registered: a gemini-* model resolves to
+    // the (here-unregistered) google provider and must 404, never misroute.
+    const registry = new ProviderRegistry();
+    registry.register(createAnthropicAdapter({ env }));
+    const gateway = createGateway({
+      config: defaultConfig(),
+      registry,
+      transport: async () => ({ status: 200, headers: {}, body: '{}' }),
+    });
     const res = await gateway.handle(post('gemini-2.5-pro'));
     expect(res.status).toBe(404);
     expect(JSON.parse(res.body).error.type).toBe('not_found_error');

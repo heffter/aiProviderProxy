@@ -61,6 +61,7 @@ import {
 import {
   anthropicResponseToChat,
   buildChatCompletion,
+  chatCompletionToCanonical,
   chatError,
   chatToAnthropicRequest,
   encodeChatStream,
@@ -1019,12 +1020,20 @@ export class Gateway {
       throw err;
     }
 
-    // Native chat upstream (OpenAI + OpenAI-compatible) is forwarded verbatim;
-    // an Anthropic upstream is translated.
-    const chatNative = adapter.upstreamProtocols.includes('openai_chat');
+    // Routing mode by upstream protocol: a native chat upstream (OpenAI +
+    // OpenAI-compatible) is forwarded verbatim; an Anthropic upstream is
+    // translated in the protocol layer; every other adapter (Gemini, Ollama)
+    // translates internally and presents a chat.completion via parseResponse.
+    const upstreamProtocol = adapter.upstreamProtocols[0];
+    const chatMode: 'verbatim' | 'anthropic' | 'translating' =
+      adapter.upstreamProtocols.includes('openai_chat')
+        ? 'verbatim'
+        : adapter.upstreamProtocols.includes('anthropic')
+          ? 'anthropic'
+          : 'translating';
     const attempt = ctx.startAttempt({
       provider: resolved.provider,
-      upstreamProtocol: chatNative ? 'openai_chat' : 'anthropic',
+      upstreamProtocol,
       routedModel: resolved.model,
       nativeModel: resolved.model,
     });
@@ -1059,24 +1068,37 @@ export class Gateway {
       }
     }
 
-    const providerRequest: CanonicalProviderRequest = chatNative
-      ? {
-          model: resolved.model,
-          stream: parsed.request.stream,
-          body: { ...parsed.request.raw, model: resolved.model },
-          headers: request.headers,
-          upstreamProtocol: 'openai_chat',
-        }
-      : {
-          model: resolved.model,
-          stream: parsed.request.stream,
-          body: chatToAnthropicRequest(
-            parsed.request,
-            resolved.model,
-          ) as unknown as Record<string, unknown>,
-          headers: request.headers,
-          upstreamProtocol: 'anthropic',
-        };
+    // Translated upstreams (Anthropic, Gemini, Ollama) are reconstructed into a
+    // chat.completion and, for streaming clients, re-emitted as a chunk stream;
+    // the upstream is therefore always requested non-streaming. A verbatim
+    // upstream streams through unchanged.
+    const providerRequest: CanonicalProviderRequest =
+      chatMode === 'verbatim'
+        ? {
+            model: resolved.model,
+            stream: parsed.request.stream,
+            body: { ...parsed.request.raw, model: resolved.model },
+            headers: request.headers,
+            upstreamProtocol: 'openai_chat',
+          }
+        : chatMode === 'anthropic'
+          ? {
+              model: resolved.model,
+              stream: false,
+              body: chatToAnthropicRequest(
+                parsed.request,
+                resolved.model,
+              ) as unknown as Record<string, unknown>,
+              headers: request.headers,
+              upstreamProtocol: 'anthropic',
+            }
+          : {
+              model: resolved.model,
+              stream: false,
+              body: { ...parsed.request.raw, model: resolved.model },
+              headers: request.headers,
+              upstreamProtocol,
+            };
 
     let transportResponse;
     try {
@@ -1146,25 +1168,38 @@ export class Gateway {
       outHeaders['x-aipp-tools-denied'] = toolsDeniedHeader;
     }
 
-    // Native upstream: forward the chat body verbatim (object or SSE).
-    if (chatNative) {
+    // Verbatim upstream: forward the chat body unchanged (object or SSE).
+    if (chatMode === 'verbatim') {
       if (parsed.request.stream) {
         outHeaders['content-type'] = 'text/event-stream';
       }
       return { status: 200, headers: outHeaders, body: transportResponse.body };
     }
 
-    // Anthropic upstream: reconstruct a chat.completion, surfacing cache tokens
-    // (fix 1) and diagnosing dropped thinking blocks (fix 2).
-    const { result, diagnostics } = anthropicResponseToChat(
-      parsedResponse.body,
-      resolved.model,
-    );
-    if (diagnostics.length > 0) {
-      outHeaders['x-aipp-thinking-diagnostics'] = diagnostics
-        .map((d) => `${d.kind}=${d.count}`)
-        .join(', ');
+    // Reconstruct a canonical chat result. The Anthropic path additionally
+    // surfaces cache tokens (fix 1) and diagnoses dropped thinking blocks
+    // (fix 2); Gemini/Ollama adapters already return a chat.completion.
+    let result;
+    if (chatMode === 'anthropic') {
+      const translated = anthropicResponseToChat(
+        parsedResponse.body,
+        resolved.model,
+      );
+      result = translated.result;
+      if (translated.diagnostics.length > 0) {
+        outHeaders['x-aipp-thinking-diagnostics'] = translated.diagnostics
+          .map((d) => `${d.kind}=${d.count}`)
+          .join(', ');
+      }
+    } else {
+      // Stamp the routed model onto the adapter-produced chat.completion.
+      if (parsedResponse.body && typeof parsedResponse.body === 'object') {
+        (parsedResponse.body as { model?: string }).model = resolved.model;
+      }
+      result = chatCompletionToCanonical(parsedResponse.body);
+      result.model = resolved.model;
     }
+
     if (parsed.request.stream) {
       outHeaders['content-type'] = 'text/event-stream';
       const sse = encodeChatStream(streamEventsForChatResult(result), {
@@ -1173,11 +1208,20 @@ export class Gateway {
       });
       return { status: 200, headers: outHeaders, body: sse };
     }
-    const obj = buildChatCompletion(result, {
-      genId: this.deps.genId,
-      now: this.deps.now,
-    });
-    return { status: 200, headers: outHeaders, body: JSON.stringify(obj) };
+    // Gemini/Ollama already produced a spec chat.completion; forward it. The
+    // Anthropic path renders one from the canonical result.
+    if (chatMode === 'anthropic') {
+      const obj = buildChatCompletion(result, {
+        genId: this.deps.genId,
+        now: this.deps.now,
+      });
+      return { status: 200, headers: outHeaders, body: JSON.stringify(obj) };
+    }
+    return {
+      status: 200,
+      headers: outHeaders,
+      body: JSON.stringify(parsedResponse.body),
+    };
   }
 
   /** Start a node:http server bound to the configured host/port. */

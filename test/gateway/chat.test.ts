@@ -164,6 +164,68 @@ describe('Anthropic-translated chat path', () => {
   });
 });
 
+describe('Gemini-translated chat path', () => {
+  const geminiResponse = {
+    candidates: [
+      {
+        content: { parts: [{ text: 'Hi from Gemini.' }] },
+        finishReason: 'STOP',
+      },
+    ],
+    usageMetadata: {
+      promptTokenCount: 8,
+      candidatesTokenCount: 3,
+      totalTokenCount: 11,
+    },
+    modelVersion: 'gemini-1.5-pro-002',
+  };
+
+  it('routes to generateContent and returns a chat.completion', async () => {
+    const transport: Transport = async (req) => {
+      expect(req.url).toBe(
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent',
+      );
+      // Body was translated to the Gemini shape.
+      expect(JSON.parse(req.body ?? '{}').contents).toBeDefined();
+      return { status: 200, headers: {}, body: JSON.stringify(geminiResponse) };
+    };
+    const { gateway, events } = harness(transport);
+    const res = await gateway.handle(post('gemini-1.5-pro'));
+
+    expect(res.status).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.object).toBe('chat.completion');
+    expect(body.model).toBe('gemini-1.5-pro'); // stamped with the routed model
+    expect(body.choices[0].message).toEqual({
+      role: 'assistant',
+      content: 'Hi from Gemini.',
+    });
+    expect(body.usage).toMatchObject({
+      prompt_tokens: 8,
+      completion_tokens: 3,
+    });
+    expect(events[0]).toMatchObject({
+      provider: 'google',
+      inputTokens: 8,
+      outputTokens: 3,
+    });
+  });
+
+  it('serves a streaming client as a buffered chat SSE transcript', async () => {
+    const transport: Transport = async (req) => {
+      // The upstream is always requested non-streaming for translated paths.
+      expect(req.url).toContain(':generateContent');
+      expect(req.url).not.toContain(':streamGenerateContent');
+      return { status: 200, headers: {}, body: JSON.stringify(geminiResponse) };
+    };
+    const { gateway } = harness(transport);
+    const res = await gateway.handle(post('gemini-1.5-pro', { stream: true }));
+    expect(res.headers['content-type']).toBe('text/event-stream');
+    expect(res.body).toContain('"content":"Hi from Gemini."');
+    expect(res.body.trimEnd().endsWith('data: [DONE]')).toBe(true);
+  });
+});
+
 describe('tool-router authorization', () => {
   function toolPost(names: string[]): GatewayRequest {
     return post('gpt-4o', {
