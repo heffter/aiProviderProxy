@@ -112,6 +112,7 @@ import { dataFile, DATA_FILES } from '../ops/trackers/paths.js';
 import { exporterHealth } from '../integrations/tokemetry/index.js';
 import { isLoopbackHost } from '../config/loader.js';
 import { timingSafeEqualStr } from '../config/security.js';
+import { checkRequestLimits, type LimitPolicy } from './limits.js';
 import {
   EstimateRateLimiter,
   estimateChat,
@@ -171,6 +172,8 @@ export interface GatewayDeps {
   mesh?: MeshStore;
   /** Data directory for the dashboard's history reads; defaults to the config home. */
   dataDir?: string;
+  /** Request size / JSON-depth limits (NFR-SEC-008); defaults applied when omitted. */
+  limits?: LimitPolicy;
   /**
    * Ordered account labels available for a provider, used for token-pool
    * account rotation on an auth failure. Defaults to none (no rotation). The
@@ -623,6 +626,19 @@ export class Gateway {
       (path === '/health' || path === '/healthz')
     ) {
       return json(200, { status: 'ok', service: 'aiproviderproxy' });
+    }
+    // Reject oversized or pathologically nested request bodies before any parse
+    // (NFR-SEC-008): a hard resource limit on every POST body.
+    if (request.method === 'POST' && request.body.length > 0) {
+      const limit = checkRequestLimits(request.body, this.deps.limits);
+      if (!limit.ok) {
+        return errorResponse(
+          anthropicError(
+            'invalid_request_error',
+            limit.reason ?? 'request too large',
+          ),
+        );
+      }
     }
     if (request.method === 'POST' && path === '/v1/messages') {
       return this.handleMessages(request);
