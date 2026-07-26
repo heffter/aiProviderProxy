@@ -102,6 +102,14 @@ import { ToolAuthorizer, decideToolEnforcement } from '../tools/index.js';
 import type { BudgetManager } from '../ops/budget/index.js';
 import { computeCacheKey, type ResponseCache } from '../ops/cache/index.js';
 import type { MeshStore } from '../ops/mesh/index.js';
+import {
+  dashboardHtml,
+  listRuns,
+  getRun,
+  summarize,
+} from '../ops/dashboard/index.js';
+import { dataFile, DATA_FILES } from '../ops/trackers/paths.js';
+import { exporterHealth } from '../integrations/tokemetry/index.js';
 import { isLoopbackHost } from '../config/loader.js';
 import {
   EstimateRateLimiter,
@@ -160,6 +168,8 @@ export interface GatewayDeps {
    * read-only memory endpoints behind the management-auth rule. No network I/O.
    */
   mesh?: MeshStore;
+  /** Data directory for the dashboard's history reads; defaults to the config home. */
+  dataDir?: string;
   /**
    * Ordered account labels available for a provider, used for token-pool
    * account rotation on an auth failure. Defaults to none (no rotation). The
@@ -637,12 +647,63 @@ export class Gateway {
     ) {
       return this.handleMemory(request, path);
     }
+    if (request.method === 'GET' && (path === '/' || path === '/dashboard')) {
+      if (!managementAuthorized(request.headers, this.deps.config)) {
+        return json(403, { error: 'dashboard requires authorization' });
+      }
+      return {
+        status: 200,
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+        body: dashboardHtml(),
+      };
+    }
+    if (request.method === 'GET' && path.startsWith('/api/')) {
+      return this.handleDashboardApi(request, path);
+    }
     return errorResponse(
       anthropicError(
         'not_found_error',
         `No route for ${request.method} ${path}`,
       ),
     );
+  }
+
+  /**
+   * The local dashboard's read-only JSON API (behind the management-auth rule).
+   * Request/response content is exposed only when content logging is on. Never
+   * performs network I/O.
+   */
+  private handleDashboardApi(
+    request: GatewayRequest,
+    path: string,
+  ): GatewayResponse {
+    if (!managementAuthorized(request.headers, this.deps.config)) {
+      return json(403, { error: 'dashboard API requires authorization' });
+    }
+    const historyPath = dataFile(DATA_FILES.history, this.deps.dataDir);
+    const contentOn = this.deps.config.contentLog.enabled;
+
+    if (path === '/api/summary') {
+      return json(200, summarize(historyPath));
+    }
+    if (path === '/api/runs') {
+      return json(200, listRuns(historyPath, contentOn));
+    }
+    if (path.startsWith('/api/runs/')) {
+      const id = decodeURIComponent(path.slice('/api/runs/'.length));
+      const run = getRun(historyPath, id, contentOn);
+      return run ? json(200, run) : json(404, { error: 'run not found' });
+    }
+    if (path === '/api/exporter') {
+      const health = this.deps.outbox
+        ? exporterHealth(this.deps.outbox)
+        : { pending: 0, exported: 0, dead: 0, healthy: true };
+      return json(200, health);
+    }
+    if (path === '/api/budget') {
+      return json(200, this.deps.budget?.getStatus() ?? { enabled: false });
+    }
+    return json(404, { error: `no dashboard route for ${path}` });
   }
 
   /**
