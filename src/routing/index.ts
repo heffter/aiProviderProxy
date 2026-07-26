@@ -68,3 +68,19 @@ export {
   BUILT_IN_MODEL_MAPPING,
   type ModelFamilyMapping,
 } from './cross-provider.js';
+
+export {
+  resolvePolicy,
+  replayPolicy,
+  loadPolicyFile,
+  policyFilePath,
+  POLICY_VERSION,
+  type RoutingPolicy,
+  type AgentPolicy,
+  type TaskPolicy,
+  type PolicyResolution,
+  type ResolvedBy,
+  type ReplayRecord,
+  type ReplaySummary,
+  type ReplayChange,
+} from './policy.js';

@@ -29,6 +29,15 @@ import {
   formatExporterHealth,
 } from '../integrations/tokemetry/index.js';
 import { buildProviderRegistry, createGateway } from '../gateway/index.js';
+import {
+  loadPolicyFile,
+  policyFilePath,
+  replayPolicy,
+  type Complexity,
+  type ReplayRecord,
+} from '../routing/index.js';
+import { existsSync, readFileSync } from 'node:fs';
+import { dataFile, DATA_FILES } from '../ops/trackers/paths.js';
 
 /** Commands available on the new CLI surface. */
 export const COMMANDS = [
@@ -36,6 +45,7 @@ export const COMMANDS = [
   'config',
   'content-log',
   'tokemetry',
+  'policy',
   'migrate-from-relayplane',
   'version',
   'help',
@@ -125,6 +135,7 @@ function helpText(): string {
     '  config show               Print the effective config with secrets redacted',
     '  content-log on|off|status Toggle or show request/response content logging',
     '  tokemetry status|dlq      Show exporter health or dead-lettered events',
+    '  policy replay             Simulate a policy over the routing log',
     '  migrate-from-relayplane   Import an existing ~/.relayplane install',
     '  version                   Print the version',
     '  help                      Show this help',
@@ -215,6 +226,87 @@ function cmdTokemetry(args: string[], io: CliIO, deps: CliDeps): number {
   }
 }
 
+/** Value of a `--flag value` option in an argv slice. */
+function flagValue(args: string[], flag: string): string | undefined {
+  const idx = args.indexOf(flag);
+  return idx >= 0 && idx + 1 < args.length ? args[idx + 1] : undefined;
+}
+
+const COMPLEXITIES: readonly Complexity[] = ['simple', 'moderate', 'complex'];
+
+/** Map an untyped routing-log v2 line to a replay record (lenient defaults). */
+function toReplayRecord(rec: Record<string, unknown>): ReplayRecord {
+  const complexity = rec.complexity;
+  const candidate =
+    typeof rec.routedModel === 'string'
+      ? rec.routedModel
+      : typeof rec.candidateModel === 'string'
+        ? rec.candidateModel
+        : '';
+  return {
+    agentName: typeof rec.agentName === 'string' ? rec.agentName : undefined,
+    agentFingerprint:
+      typeof rec.agentFingerprint === 'string'
+        ? rec.agentFingerprint
+        : undefined,
+    taskType: typeof rec.taskType === 'string' ? rec.taskType : 'general',
+    complexity: COMPLEXITIES.includes(complexity as Complexity)
+      ? (complexity as Complexity)
+      : 'moderate',
+    candidateModel: candidate,
+  };
+}
+
+/**
+ * `aipp policy replay` -- simulate a policy over the routing-log v2 records
+ * and report which routed models it would have changed. Reads only local files;
+ * no network egress and no writes.
+ */
+function cmdPolicy(args: string[], io: CliIO): number {
+  if (args[0] !== 'replay') {
+    io.err('usage: aipp policy replay [--policy <file>] [--log <file>]');
+    return 2;
+  }
+  const policyPath = flagValue(args, '--policy') ?? policyFilePath();
+  const logPath = flagValue(args, '--log') ?? dataFile(DATA_FILES.routingLog);
+
+  const policy = loadPolicyFile(policyPath);
+  if (!policy) {
+    io.err(
+      `no valid policy at ${policyPath} (missing, unparseable, or wrong version)`,
+    );
+    return 1;
+  }
+  if (!existsSync(logPath)) {
+    io.err(`no routing log at ${logPath}`);
+    return 1;
+  }
+
+  const records: ReplayRecord[] = [];
+  for (const line of readFileSync(logPath, 'utf8').split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    try {
+      records.push(
+        toReplayRecord(JSON.parse(trimmed) as Record<string, unknown>),
+      );
+    } catch {
+      // skip a malformed line rather than aborting the whole replay
+    }
+  }
+
+  const summary = replayPolicy(records, policy);
+  io.out(
+    `replayed ${summary.total} record(s): ${summary.changed} changed, ${summary.unchanged} unchanged`,
+  );
+  for (const change of summary.changes) {
+    io.out(`  ${change.from} -> ${change.to}  (${change.resolvedBy})`);
+  }
+  return 0;
+}
+
 function cmdMigrate(args: string[], io: CliIO): number {
   try {
     const result = migrateFromRelayplane({ force: args.includes('--force') });
@@ -271,6 +363,8 @@ export async function runCli(
       return cmdContentLog(args, io, file);
     case 'tokemetry':
       return cmdTokemetry(args, io, deps);
+    case 'policy':
+      return cmdPolicy(args, io);
     case 'migrate-from-relayplane':
       return cmdMigrate(args, io);
     default:

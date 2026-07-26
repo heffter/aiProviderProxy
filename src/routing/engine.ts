@@ -70,6 +70,8 @@ export interface RoutingDecision {
   reason: string;
   /** Classified complexity, when a complexity-aware mode ran. */
   complexity?: Complexity;
+  /** Policy asked this selection never be downgraded (epic AIPP-10, 10.5). */
+  neverDowngrade?: boolean;
 }
 
 /** A model resolver (injected for tests); defaults to {@link resolveModel}. */

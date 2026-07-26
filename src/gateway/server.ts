@@ -46,9 +46,13 @@ import {
   backoffDelayMs,
   shouldPreStreamRetry,
   CooldownManager,
+  classifyComplexity,
+  resolvePolicy,
+  loadPolicyFile,
   type RoutingDecision,
   type FallbackTrigger,
   type RetryPolicy,
+  type RoutingPolicy,
 } from '../routing/index.js';
 import {
   anthropicError,
@@ -147,6 +151,12 @@ export interface GatewayDeps {
   random?: () => number;
   /** Provider cooldown breaker; defaults to one built from `config.routing.cooldown`. */
   cooldown?: CooldownManager;
+  /**
+   * Agent-routing policy for live enforcement. When omitted and
+   * `routing.policy.enforce` is set, it is loaded from `<home>/policy.yaml`.
+   * Pass `null` to disable enforcement even when the flag is on.
+   */
+  routingPolicy?: RoutingPolicy | null;
   clock?: Clock;
   genId?: IdGen;
   now?: () => number;
@@ -406,6 +416,7 @@ export class Gateway {
   private readonly toolAuthorizer: ToolAuthorizer;
   private readonly modelRegistry: ModelRegistry;
   private readonly cooldown: CooldownManager;
+  private readonly routingPolicy: RoutingPolicy | null;
   private readonly estimateLimiter: EstimateRateLimiter;
   private server?: Server;
 
@@ -427,6 +438,14 @@ export class Gateway {
         },
         { now: deps.now },
       );
+    // Load the agent-routing policy only when enforcement is on and none was
+    // injected. A missing/invalid file yields null (enforcement is inert).
+    this.routingPolicy =
+      deps.routingPolicy !== undefined
+        ? deps.routingPolicy
+        : deps.config.routing.policy.enforce
+          ? loadPolicyFile()
+          : null;
     this.estimateLimiter = new EstimateRateLimiter({ now: deps.now });
   }
 
@@ -442,6 +461,7 @@ export class Gateway {
     requestedModel: string,
     raw: unknown,
     warn?: (message: string) => void,
+    headers?: Record<string, string>,
   ): RoutingDecision | null {
     const body = (raw ?? {}) as Record<string, unknown>;
     const source = Array.isArray(body.messages)
@@ -457,7 +477,7 @@ export class Gateway {
       body.thinking != null ||
       body.reasoning != null ||
       body.reasoning_effort != null;
-    return planRoute(
+    const decision = planRoute(
       {
         requestedModel,
         messages,
@@ -473,6 +493,55 @@ export class Gateway {
         warn,
       },
     );
+    if (decision && this.deps.config.routing.policy.enforce) {
+      this.enforcePolicy(decision, messages, headers ?? {});
+    }
+    return decision;
+  }
+
+  /**
+   * Apply the agent-routing policy to a decision in place (FR-ROUTE-007/015).
+   * A matching rule overrides the primary selection and records the policy name
+   * and reason; a `neverDowngrade` rule blocks any later budget downgrade. Agent
+   * identity and task type come from request headers. Inert when no policy is
+   * loaded or no rule matches.
+   */
+  private enforcePolicy(
+    decision: RoutingDecision,
+    messages: Array<{ role: string; text: string }>,
+    headers: Record<string, string>,
+  ): void {
+    if (!this.routingPolicy) {
+      return;
+    }
+    const candidateModel = `${decision.primary.provider}/${decision.primary.model}`;
+    const complexity =
+      decision.complexity ?? classifyComplexity(messages).complexity;
+    const resolution = resolvePolicy(
+      this.routingPolicy,
+      header(headers, 'x-aipp-agent-fingerprint'),
+      header(headers, 'x-aipp-agent'),
+      header(headers, 'x-aipp-task-type') ?? 'general',
+      complexity,
+      candidateModel,
+    );
+    decision.neverDowngrade = resolution.neverDowngrade;
+    if (resolution.model === candidateModel) {
+      return;
+    }
+    const resolved = resolveModel(resolution.model, {
+      overrides: this.deps.config.models.overrides,
+    });
+    if (!resolved) {
+      return; // unknown policy target: leave the mode selection untouched
+    }
+    decision.primary = {
+      provider: resolved.provider,
+      model: resolved.model,
+      routedModel: resolved.model,
+    };
+    decision.policy = `policy:${resolution.resolvedBy}`;
+    decision.reason = resolution.reason;
   }
 
   /** Handle a single request. Never throws for ordinary errors. */
@@ -751,7 +820,12 @@ export class Gateway {
       return errorResponse(parsed.error);
     }
 
-    const route = this.planRouteFor(parsed.request.model, parsed.request.raw);
+    const route = this.planRouteFor(
+      parsed.request.model,
+      parsed.request.raw,
+      undefined,
+      request.headers,
+    );
     if (!route) {
       return errorResponse(
         anthropicError(
@@ -774,16 +848,23 @@ export class Gateway {
 
     // Budget downgrade: swap the primary model for a cheaper one when the budget
     // threshold is crossed. The swap is a distinct, header-marked routing event
-    // (fallbackTrigger 'downgrade'), not a post-failure hop.
+    // (fallbackTrigger 'downgrade'), not a post-failure hop. A policy that pins
+    // the model (neverDowngrade) suppresses it (FR-ROUTE-015).
     const dgCfg = this.deps.config.routing.downgrade;
-    const downgrade = checkDowngrade(resolved.model, this.budgetPercent(), {
-      enabled: dgCfg.enabled,
-      thresholdPercent: dgCfg.thresholdPercent,
-      mapping:
-        Object.keys(dgCfg.mapping).length > 0
-          ? dgCfg.mapping
-          : DEFAULT_DOWNGRADE_MAPPING,
-    });
+    const downgrade = route.neverDowngrade
+      ? checkDowngrade(resolved.model, 0, {
+          enabled: false,
+          thresholdPercent: 100,
+          mapping: {},
+        })
+      : checkDowngrade(resolved.model, this.budgetPercent(), {
+          enabled: dgCfg.enabled,
+          thresholdPercent: dgCfg.thresholdPercent,
+          mapping:
+            Object.keys(dgCfg.mapping).length > 0
+              ? dgCfg.mapping
+              : DEFAULT_DOWNGRADE_MAPPING,
+        });
 
     // Ordered hop queue: the (possibly downgraded) primary, then the
     // capability-filtered cross-provider fallbacks from the routing decision.
@@ -1214,7 +1295,12 @@ export class Gateway {
       return responsesErrorResponse(parsed.status, parsed.error);
     }
 
-    const route = this.planRouteFor(parsed.request.model, parsed.request.raw);
+    const route = this.planRouteFor(
+      parsed.request.model,
+      parsed.request.raw,
+      undefined,
+      request.headers,
+    );
     if (!route) {
       return responsesErrorResponse(
         400,
@@ -1467,6 +1553,7 @@ export class Gateway {
       parsed.request.model,
       parsed.request.raw,
       (message) => deprecations.push(message),
+      request.headers,
     );
     if (!route) {
       return chatErrorResponse(
