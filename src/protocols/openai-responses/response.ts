@@ -1,5 +1,5 @@
 /**
- * OpenAI Responses non-streaming object construction (epic AIPP-7, subtask 7.2;
+ * OpenAI Responses object construction (epic AIPP-7, subtask 7.2;
  * FR-RESP-002/003/009/013/014).
  *
  * Renders a provider-neutral *canonical result* as a spec-valid non-streaming
@@ -8,14 +8,19 @@
  * and a fully-populated `usage` block (input/output tokens with cached-input and
  * reasoning-token details). The canonical result is upstream-agnostic: it can be
  * built from an OpenAI Responses upstream (near-verbatim) or reconstructed from a
- * Chat Completions upstream (subtask 7.5). This module owns only the client-wire
- * rendering.
+ * Chat Completions upstream (subtask 7.5).
+ *
+ * The item and envelope renderers are exported so the streaming encoder
+ * (subtask 7.3) emits byte-identical output items and response snapshots.
  */
 
 import { uuidGen, type IdGen } from '../../lifecycle/index.js';
 
 /** Terminal status of a canonical result. */
 export type ResponseStatus = 'completed' | 'failed' | 'incomplete';
+
+/** Response status while a stream is still open. */
+export type ResponseSnapshotStatus = 'in_progress' | ResponseStatus;
 
 /** One provider-neutral output produced by the model. */
 export type CanonicalOutput =
@@ -85,10 +90,42 @@ export interface ResponsesBuildDeps {
 }
 
 /** A rendered Responses output item. */
-type ResponsesOutputItem = Record<string, unknown>;
+export type ResponsesOutputItem = Record<string, unknown>;
 
-function prefixedId(genId: IdGen, prefix: string): string {
+/** Mint a prefixed id (`resp_...`, `msg_...`, `fc_...`) from an id generator. */
+export function prefixedId(genId: IdGen, prefix: string): string {
   return `${prefix}_${genId().replace(/-/g, '')}`;
+}
+
+/** Render a completed `message` output item with a single output_text part. */
+export function messageOutputItem(
+  id: string,
+  text: string,
+): ResponsesOutputItem {
+  return {
+    type: 'message',
+    id,
+    status: 'completed',
+    role: 'assistant',
+    content: [{ type: 'output_text', text, annotations: [] }],
+  };
+}
+
+/** Render a completed `function_call` output item. */
+export function functionCallOutputItem(
+  id: string,
+  callId: string,
+  name: string,
+  args: string,
+): ResponsesOutputItem {
+  return {
+    type: 'function_call',
+    id,
+    status: 'completed',
+    call_id: callId,
+    name,
+    arguments: args,
+  };
 }
 
 /** Render the canonical `usage` block into the Responses usage shape. */
@@ -104,34 +141,92 @@ export function renderResponsesUsage(
   };
 }
 
-/** Render one canonical output into its Responses output item. */
+/** Render one canonical output into its completed Responses output item. */
 function renderOutputItem(
   output: CanonicalOutput,
   genId: IdGen,
 ): ResponsesOutputItem {
   if (output.kind === 'message') {
-    return {
-      type: 'message',
-      id: prefixedId(genId, 'msg'),
-      status: 'completed',
-      role: 'assistant',
-      content: [
-        {
-          type: 'output_text',
-          text: output.text,
-          annotations: [],
-        },
-      ],
-    };
+    return messageOutputItem(prefixedId(genId, 'msg'), output.text);
   }
-  return {
-    type: 'function_call',
-    id: prefixedId(genId, 'fc'),
-    status: 'completed',
-    call_id: output.callId,
-    name: output.name,
-    arguments: output.arguments,
+  return functionCallOutputItem(
+    prefixedId(genId, 'fc'),
+    output.callId,
+    output.name,
+    output.arguments,
+  );
+}
+
+/** Parameters for {@link renderResponseEnvelope}. */
+export interface ResponseEnvelopeParams {
+  id: string;
+  model: string;
+  status: ResponseSnapshotStatus;
+  createdAt: number;
+  /** Pre-rendered output items (already carrying their assigned ids). */
+  outputs: ResponsesOutputItem[];
+  /** Aggregated `output_text` convenience string. */
+  outputText: string;
+  usage?: CanonicalResponseUsage;
+  incompleteReason?: string;
+  error?: { code?: string; message: string };
+  echo?: ResponsesEcho;
+}
+
+/**
+ * Render the top-level Responses envelope from pre-rendered output items. Shared
+ * by the non-streaming builder and the streaming encoder so a streamed
+ * `response.completed` snapshot is byte-identical to the equivalent
+ * non-streaming object.
+ */
+export function renderResponseEnvelope(
+  params: ResponseEnvelopeParams,
+): Record<string, unknown> {
+  const echo = params.echo ?? {};
+  const obj: Record<string, unknown> = {
+    id: params.id,
+    object: 'response',
+    created_at: params.createdAt,
+    status: params.status,
+    error:
+      params.status === 'failed'
+        ? {
+            code: params.error?.code ?? 'server_error',
+            message: params.error?.message ?? 'Response failed',
+          }
+        : null,
+    incomplete_details:
+      params.status === 'incomplete'
+        ? { reason: params.incompleteReason ?? 'max_output_tokens' }
+        : null,
+    instructions: echo.instructions ?? null,
+    max_output_tokens: echo.maxOutputTokens ?? null,
+    model: params.model,
+    output: params.outputs,
+    output_text: params.outputText,
+    parallel_tool_calls: echo.parallelToolCalls ?? true,
+    temperature: echo.temperature ?? null,
+    tool_choice: echo.toolChoice ?? 'auto',
+    tools: echo.tools ?? [],
+    top_p: echo.topP ?? null,
+    reasoning: echo.reasoning ?? { effort: null, summary: null },
+    metadata: echo.metadata ?? {},
   };
+  if (params.usage) {
+    obj.usage = renderResponsesUsage(params.usage);
+  }
+  return obj;
+}
+
+/** Aggregate the `output_text` convenience string from canonical outputs. */
+export function aggregateOutputText(outputs: CanonicalOutput[]): string {
+  return outputs
+    .filter(
+      (o): o is Extract<CanonicalOutput, { kind: 'message' }> =>
+        o.kind === 'message',
+    )
+    .map((o) => o.text)
+    .join('');
 }
 
 /**
@@ -144,52 +239,17 @@ export function buildResponsesObject(
   const genId = deps.genId ?? uuidGen;
   const nowMs = deps.now ? deps.now() : Date.now();
   const createdAt = result.createdAt ?? Math.floor(nowMs / 1000);
-  const echo = deps.echo ?? {};
 
-  const output = result.outputs.map((o) => renderOutputItem(o, genId));
-
-  // output_text: convenience aggregation of every message item's text.
-  const outputText = result.outputs
-    .filter(
-      (o): o is Extract<CanonicalOutput, { kind: 'message' }> =>
-        o.kind === 'message',
-    )
-    .map((o) => o.text)
-    .join('');
-
-  const obj: Record<string, unknown> = {
+  return renderResponseEnvelope({
     id: result.id ?? prefixedId(genId, 'resp'),
-    object: 'response',
-    created_at: createdAt,
-    status: result.status,
-    error:
-      result.status === 'failed'
-        ? {
-            code: result.error?.code ?? 'server_error',
-            message: result.error?.message ?? 'Response failed',
-          }
-        : null,
-    incomplete_details:
-      result.status === 'incomplete'
-        ? { reason: result.incompleteReason ?? 'max_output_tokens' }
-        : null,
-    instructions: echo.instructions ?? null,
-    max_output_tokens: echo.maxOutputTokens ?? null,
     model: result.model,
-    output,
-    output_text: outputText,
-    parallel_tool_calls: echo.parallelToolCalls ?? true,
-    temperature: echo.temperature ?? null,
-    tool_choice: echo.toolChoice ?? 'auto',
-    tools: echo.tools ?? [],
-    top_p: echo.topP ?? null,
-    reasoning: echo.reasoning ?? { effort: null, summary: null },
-    metadata: echo.metadata ?? {},
-  };
-
-  if (result.usage) {
-    obj.usage = renderResponsesUsage(result.usage);
-  }
-
-  return obj;
+    status: result.status,
+    createdAt,
+    outputs: result.outputs.map((o) => renderOutputItem(o, genId)),
+    outputText: aggregateOutputText(result.outputs),
+    usage: result.usage,
+    incompleteReason: result.incompleteReason,
+    error: result.error,
+    echo: deps.echo,
+  });
 }
