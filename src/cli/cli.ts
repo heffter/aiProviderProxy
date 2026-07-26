@@ -36,6 +36,10 @@ import {
   DATA_FILES,
   AlertManager,
   ResponseCache,
+  detectPlatform,
+  serviceTemplate,
+  installHint,
+  type ServicePlatform,
 } from '../ops/index.js';
 import type { Config } from '../config/index.js';
 import {
@@ -57,6 +61,7 @@ export const COMMANDS = [
   'alerts',
   'cache',
   'mesh',
+  'service',
   'migrate-from-relayplane',
   'version',
   'help',
@@ -168,6 +173,7 @@ function helpText(): string {
     '  alerts recent|counts      Show recent alerts or counts by type',
     '  cache stats|clear         Show cache stats or clear the cache',
     '  mesh status|on|off        Toggle the local mesh learning store',
+    '  service template          Print a run-at-boot service definition',
     '  migrate-from-relayplane   Import an existing ~/.relayplane install',
     '  version                   Print the version',
     '  help                      Show this help',
@@ -450,6 +456,37 @@ function cmdMesh(args: string[], io: CliIO, file: string): number {
   }
 }
 
+/**
+ * `aipp service template [--platform systemd|launchd|windows]` -- print a
+ * run-at-boot service definition for the host (FR-OPS-006). Installation needs
+ * elevation and is a documented manual step, so this command only prints the
+ * template and the exact install command; it performs no privileged action.
+ */
+function cmdService(args: string[], io: CliIO): number {
+  if (args[0] !== 'template') {
+    io.err('usage: aipp service template [--platform systemd|launchd|windows]');
+    return 2;
+  }
+  const requested = flagValue(args, '--platform');
+  const valid: ServicePlatform[] = ['systemd', 'launchd', 'windows'];
+  const platform: ServicePlatform =
+    requested && (valid as string[]).includes(requested)
+      ? (requested as ServicePlatform)
+      : detectPlatform();
+  const cliPath = join(__dirname, 'aipp.js');
+  const template = serviceTemplate(platform, {
+    nodePath: process.execPath,
+    cliPath,
+  });
+  const fileHint =
+    platform === 'windows'
+      ? join(configHome(), 'aiproviderproxy-task.xml')
+      : 'the location below';
+  io.out(template);
+  io.err(`# ${platform}: ${installHint(platform, fileHint)}`);
+  return 0;
+}
+
 function cmdMigrate(args: string[], io: CliIO): number {
   try {
     const result = migrateFromRelayplane({ force: args.includes('--force') });
@@ -514,6 +551,8 @@ export async function runCli(
       return cmdCache(args, io, file);
     case 'mesh':
       return cmdMesh(args, io, file);
+    case 'service':
+      return cmdService(args, io);
     case 'migrate-from-relayplane':
       return cmdMigrate(args, io);
     default:

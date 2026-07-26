@@ -10,6 +10,7 @@ export * from './alerts/index.js';
 export * from './cache/index.js';
 export * from './mesh/index.js';
 export * from './dashboard/index.js';
+export * from './service/index.js';
 
 /** Identifies this module within the target skeleton. */
 export const MODULE_NAME = 'ops';
