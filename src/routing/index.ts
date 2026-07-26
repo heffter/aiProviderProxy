@@ -45,3 +45,12 @@ export {
   type DowngradeConfig,
   type DowngradeResult,
 } from './fallback.js';
+
+export {
+  isPreStreamRetryable,
+  backoffDelayMs,
+  shouldPreStreamRetry,
+  PRESTREAM_RETRYABLE_CATEGORIES,
+  DEFAULT_RETRY_POLICY,
+  type RetryPolicy,
+} from './retry.js';

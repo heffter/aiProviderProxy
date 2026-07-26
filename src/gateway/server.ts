@@ -43,8 +43,11 @@ import {
   isReliabilityStatus,
   isReliabilityCategory,
   DEFAULT_DOWNGRADE_MAPPING,
+  backoffDelayMs,
+  shouldPreStreamRetry,
   type RoutingDecision,
   type FallbackTrigger,
+  type RetryPolicy,
 } from '../routing/index.js';
 import {
   anthropicError,
@@ -137,6 +140,10 @@ export interface GatewayDeps {
    * real token-pool source is wired in a later subtask.
    */
   accountsFor?: (provider: string) => string[];
+  /** Backoff sleep (injected for deterministic retry tests). */
+  sleep?: (ms: number) => Promise<void>;
+  /** RNG for retry jitter (injected for deterministic retry tests). */
+  random?: () => number;
   clock?: Clock;
   genId?: IdGen;
   now?: () => number;
@@ -370,6 +377,8 @@ interface RoutingHop {
   fallbackFrom?: string;
   /** Why this hop exists (downgrade/reliability/rotation); unset for the primary. */
   fallbackTrigger?: FallbackTrigger;
+  /** Same-model pre-stream retries already spent on this candidate. */
+  retryCount?: number;
 }
 
 function categoryToTerminalState(category: ErrorCategory): TerminalState {
@@ -575,6 +584,67 @@ export class Gateway {
   /** Ordered account labels for a provider (empty when rotation is unavailable). */
   private accountsFor(provider: string): string[] {
     return this.deps.accountsFor?.(provider) ?? [];
+  }
+
+  /** Sleep for a backoff interval (injectable for deterministic tests). */
+  private sleep(ms: number): Promise<void> {
+    if (this.deps.sleep) {
+      return this.deps.sleep(ms);
+    }
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /** The active pre-stream retry policy (from config, with defaults). */
+  private retryPolicy(): RetryPolicy {
+    const r = this.deps.config.routing.retry;
+    return {
+      maxRetries: r.maxRetries,
+      baseDelayMs: r.baseDelayMs,
+      maxDelayMs: r.maxDelayMs,
+      jitter: r.jitter,
+    };
+  }
+
+  /**
+   * Decide what to do after a failed hop and mutate the work queue accordingly.
+   * A same-model pre-stream retry (bounded, backoff, adapter-gated) is preferred
+   * for transient connection/timeout failures; otherwise a reliability fallback
+   * or account rotation. Returns true when the loop should continue (the failed
+   * attempt was superseded), false when the failure is terminal.
+   */
+  private async advanceAfterFailure(
+    category: ErrorCategory,
+    httpStatus: number | undefined,
+    adapter: ProviderAdapter,
+    queue: RoutingHop[],
+    hop: RoutingHop,
+    accountCursor: Map<string, number>,
+  ): Promise<boolean> {
+    const retryCount = hop.retryCount ?? 0;
+    const policy = this.retryPolicy();
+    if (
+      shouldPreStreamRetry(category, retryCount, policy, adapter.retrySafety)
+    ) {
+      // Same-model retry: sleep the backoff, then re-queue this hop. Runs before
+      // any client output, so it is always safe (post-stream retry is forbidden).
+      await this.sleep(
+        backoffDelayMs(retryCount, policy, this.deps.random ?? Math.random),
+      );
+      queue.unshift({
+        ...hop,
+        retryCount: retryCount + 1,
+        fallbackFrom: hop.model,
+        fallbackTrigger: 'reliability',
+      });
+      return true;
+    }
+    return this.nextFallbackHop(
+      category,
+      httpStatus,
+      queue,
+      hop,
+      accountCursor,
+    );
   }
 
   /**
@@ -826,7 +896,14 @@ export class Gateway {
           : adapter.classifyError({ cause });
         attempt.complete(categoryToTerminalState(category));
         if (
-          this.nextFallbackHop(category, undefined, queue, hop, accountCursor)
+          await this.advanceAfterFailure(
+            category,
+            undefined,
+            adapter,
+            queue,
+            hop,
+            accountCursor,
+          )
         ) {
           this.emitAttempt(ctx, attempt, { success: false, outcome: category });
           continue;
@@ -853,9 +930,10 @@ export class Gateway {
           transportResponse.status,
         );
         if (
-          this.nextFallbackHop(
+          await this.advanceAfterFailure(
             category,
             transportResponse.status,
+            adapter,
             queue,
             hop,
             accountCursor,

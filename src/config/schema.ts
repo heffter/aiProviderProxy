@@ -130,6 +130,16 @@ export const routingSchema = z
       })
       .passthrough()
       .default({}),
+    /** Pre-stream same-model retry with backoff (epic AIPP-10, 10.3). */
+    retry: z
+      .object({
+        maxRetries: z.number().int().min(0).default(2),
+        baseDelayMs: z.number().int().min(0).default(250),
+        maxDelayMs: z.number().int().min(0).default(4000),
+        jitter: z.boolean().default(true),
+      })
+      .passthrough()
+      .default({}),
     policy: z
       .object({ enforce: z.boolean().default(false) })
       .passthrough()
