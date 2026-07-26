@@ -47,19 +47,9 @@
   "author": "RelayPlane",
   "license": "MIT",
   "dependencies": {
-    "@relayplane/core": "^0.1.4",
-    "@relayplane/learning-engine": "^0.1.0",
-    "fastest-levenshtein": "^1.0.16",
+    "better-sqlite3": "^11.10.0",
     "js-yaml": "^4.1.0",
     "zod": "^3.25.76"
-  },
-  "optionalDependencies": {
-    "@relayplane/auth-gate": "^0.1.0",
-    "@relayplane/explainability": "^0.1.0",
-    "@relayplane/ledger": "^0.1.0",
-    "@relayplane/policy-engine": "^0.1.0",
-    "@relayplane/routing-engine": "^0.1.0",
-    "better-sqlite3": "^11.0.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
