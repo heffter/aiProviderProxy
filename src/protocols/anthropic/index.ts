@@ -4,4 +4,5 @@
 
 export * from './errors.js';
 export * from './messages-request.js';
+export * from './stream-encoder.js';
 export * from './translate.js';
