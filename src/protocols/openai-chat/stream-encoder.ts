@@ -24,6 +24,7 @@ import { uuidGen, type IdGen } from '../../lifecycle/index.js';
 import {
   chatCompletionId,
   renderChatUsage,
+  type CanonicalChatResult,
   type CanonicalChatUsage,
 } from './response.js';
 
@@ -201,6 +202,37 @@ export class ChatChunkEncoder {
 /** Frame one SSE record: a single `data:` line and a blank-line terminator. */
 function frame(data: unknown): string {
   return `data: ${JSON.stringify(data)}\n\n`;
+}
+
+/**
+ * Expand a completed canonical chat result into the stream event script that
+ * reproduces it. Used to serve a streaming chat request from a non-streaming (or
+ * reconstructed) upstream result via {@link encodeChatStream}.
+ */
+export function streamEventsForChatResult(
+  result: CanonicalChatResult,
+): ChatStreamEvent[] {
+  const events: ChatStreamEvent[] = [
+    { type: 'start', model: result.model, id: result.id },
+  ];
+  if (result.text) {
+    events.push({ type: 'text', text: result.text });
+  }
+  (result.toolCalls ?? []).forEach((call, index) => {
+    events.push({
+      type: 'tool_call_start',
+      index,
+      id: call.id,
+      name: call.name,
+    });
+    events.push({ type: 'tool_args', index, delta: call.arguments });
+  });
+  events.push({
+    type: 'finish',
+    reason: result.finishReason,
+    usage: result.usage,
+  });
+  return events;
 }
 
 /**

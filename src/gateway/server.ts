@@ -58,6 +58,18 @@ import {
   type ResponsesErrorEnvelope,
   type ResponsesErrorType,
 } from '../protocols/openai-responses/index.js';
+import {
+  anthropicResponseToChat,
+  buildChatCompletion,
+  chatError,
+  chatToAnthropicRequest,
+  encodeChatStream,
+  parseChatRequest,
+  streamEventsForChatResult,
+  type ChatErrorEnvelope,
+  type ChatErrorType,
+  type ParsedChatRequest,
+} from '../protocols/openai-chat/index.js';
 import { ToolAuthorizer, decideToolEnforcement } from '../tools/index.js';
 import { httpTransport } from './transport.js';
 
@@ -209,6 +221,74 @@ function responsesErrorResponse(
   };
 }
 
+/** Map a canonical error category to an OpenAI Chat client error. */
+export function categoryToChatError(category: ErrorCategory): {
+  type: ChatErrorType;
+  status: number;
+} {
+  switch (category) {
+    case 'provider_auth_error':
+    case 'client_auth_error':
+      return { type: 'authentication_error', status: 401 };
+    case 'policy_rejected':
+      return { type: 'permission_error', status: 403 };
+    case 'provider_rate_limited':
+    case 'provider_overloaded':
+      return { type: 'rate_limit_error', status: 429 };
+    case 'provider_validation_error':
+    case 'client_validation_error':
+    case 'capability_unsupported':
+      return { type: 'invalid_request_error', status: 400 };
+    default:
+      return { type: 'server_error', status: 500 };
+  }
+}
+
+/** An OpenAI-shaped error response for the Chat surface. */
+function chatErrorResponse(
+  status: number,
+  envelope: ChatErrorEnvelope,
+): GatewayResponse {
+  return {
+    status,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(envelope),
+  };
+}
+
+/** The function-tool names in a chat `tools` array (skip malformed). */
+function requestedChatToolNames(tools: unknown[] | undefined): string[] {
+  if (!Array.isArray(tools)) {
+    return [];
+  }
+  const names: string[] = [];
+  for (const tool of tools) {
+    const name = (tool as { function?: { name?: unknown } }).function?.name;
+    if (typeof name === 'string' && name.length > 0) {
+      names.push(name);
+    }
+  }
+  return names;
+}
+
+/** Drop denied function tools from a chat request (typed + raw). */
+function stripDeniedChatTools(
+  request: ParsedChatRequest,
+  allowed: Set<string>,
+): void {
+  const keep = (tool: unknown): boolean => {
+    const name = (tool as { function?: { name?: unknown } }).function?.name;
+    return typeof name === 'string' && allowed.has(name);
+  };
+  if (Array.isArray(request.tools)) {
+    request.tools = request.tools.filter(keep);
+  }
+  const rawTools = (request.raw as { tools?: unknown }).tools;
+  if (Array.isArray(rawTools)) {
+    (request.raw as { tools: unknown[] }).tools = rawTools.filter(keep);
+  }
+}
+
 /** Request-derived fields echoed back onto a reconstructed Responses object. */
 function buildResponsesEcho(request: {
   instructions?: string;
@@ -288,6 +368,9 @@ export class Gateway {
     }
     if (request.method === 'POST' && path === '/v1/responses') {
       return this.handleResponses(request);
+    }
+    if (request.method === 'POST' && path === '/v1/chat/completions') {
+      return this.handleChat(request);
     }
     return errorResponse(
       anthropicError(
@@ -868,6 +951,231 @@ export class Gateway {
       genId: this.deps.genId,
       now: this.deps.now,
       echo,
+    });
+    return { status: 200, headers: outHeaders, body: JSON.stringify(obj) };
+  }
+
+  /**
+   * OpenAI Chat Completions `POST /v1/chat/completions` (epic AIPP-8). Serves
+   * OpenAI-SDK chat clients across upstreams: a provider that speaks Chat
+   * Completions natively (OpenAI and the OpenAI-compatible providers) is
+   * forwarded verbatim; an Anthropic upstream is served by translating the
+   * request to Messages and reconstructing a chat.completion, with the cache-
+   * token and thinking-diagnostic fixes (subtask 8.2).
+   */
+  private async handleChat(request: GatewayRequest): Promise<GatewayResponse> {
+    const parsed = parseChatRequest(request.body);
+    if (!parsed.ok) {
+      return chatErrorResponse(parsed.status, parsed.error);
+    }
+
+    const resolved = resolveModel(parsed.request.model, {
+      overrides: this.deps.config.models.overrides,
+    });
+    if (!resolved) {
+      return chatErrorResponse(
+        400,
+        chatError(
+          'invalid_request_error',
+          `Unknown model "${parsed.request.model}"`,
+          { param: 'model' },
+        ),
+      );
+    }
+
+    const sessionId = header(request.headers, 'x-claude-code-session-id');
+    const ctx = new RequestContext(
+      {
+        clientProtocol: 'openai_chat',
+        requestedModel: parsed.request.model,
+        sessionId,
+        streaming: parsed.request.stream,
+      },
+      { clock: this.deps.clock, genId: this.deps.genId },
+    );
+
+    let adapter: ProviderAdapter;
+    try {
+      adapter = this.deps.registry.get(resolved.provider);
+    } catch (err) {
+      if (err instanceof ProviderRegistryError) {
+        const attempt = ctx.startAttempt({
+          provider: resolved.provider,
+          upstreamProtocol: 'unknown',
+          routedModel: resolved.model,
+          nativeModel: resolved.model,
+        });
+        attempt.complete('internal_error');
+        ctx.complete('internal_error');
+        this.emit(ctx, attempt, {
+          success: false,
+          outcome: 'capability_unsupported',
+        });
+        return chatErrorResponse(
+          404,
+          chatError('not_found_error', err.message),
+        );
+      }
+      throw err;
+    }
+
+    // Native chat upstream (OpenAI + OpenAI-compatible) is forwarded verbatim;
+    // an Anthropic upstream is translated.
+    const chatNative = adapter.upstreamProtocols.includes('openai_chat');
+    const attempt = ctx.startAttempt({
+      provider: resolved.provider,
+      upstreamProtocol: chatNative ? 'openai_chat' : 'anthropic',
+      routedModel: resolved.model,
+      nativeModel: resolved.model,
+    });
+
+    // Tool-router authorization on the requested function tools (FR-TOOLS-008).
+    let toolsDeniedHeader: string | undefined;
+    const requestedTools = requestedChatToolNames(parsed.request.tools);
+    if (requestedTools.length > 0) {
+      const decision = decideToolEnforcement(
+        this.toolAuthorizer,
+        request.headers,
+        sessionId ?? '',
+        requestedTools,
+      );
+      if (decision.action === 'reject') {
+        attempt.complete('policy_rejected');
+        ctx.complete('policy_rejected');
+        this.emit(ctx, attempt, { success: false, outcome: 'policy_rejected' });
+        return chatErrorResponse(
+          403,
+          chatError(
+            'permission_error',
+            'All requested tools are denied by the active tool pack policy ' +
+              `(denied: ${decision.result.deniedHeader}).`,
+            { param: 'tools', code: 'tools_denied' },
+          ),
+        );
+      }
+      if (decision.action === 'strip') {
+        stripDeniedChatTools(parsed.request, new Set(decision.result.allowed));
+        toolsDeniedHeader = decision.result.deniedHeader;
+      }
+    }
+
+    const providerRequest: CanonicalProviderRequest = chatNative
+      ? {
+          model: resolved.model,
+          stream: parsed.request.stream,
+          body: { ...parsed.request.raw, model: resolved.model },
+          headers: request.headers,
+          upstreamProtocol: 'openai_chat',
+        }
+      : {
+          model: resolved.model,
+          stream: parsed.request.stream,
+          body: chatToAnthropicRequest(
+            parsed.request,
+            resolved.model,
+          ) as unknown as Record<string, unknown>,
+          headers: request.headers,
+          upstreamProtocol: 'anthropic',
+        };
+
+    let transportResponse;
+    try {
+      transportResponse = await this.transport(
+        adapter.serializeRequest(providerRequest),
+        { signal: request.signal },
+      );
+    } catch (cause) {
+      const category: ErrorCategory = request.signal?.aborted
+        ? 'client_cancelled'
+        : adapter.classifyError({ cause });
+      attempt.complete(categoryToTerminalState(category));
+      ctx.complete(categoryToTerminalState(category));
+      this.emit(ctx, attempt, { success: false, outcome: category });
+      const mapped = categoryToChatError(category);
+      return chatErrorResponse(
+        mapped.status,
+        chatError(mapped.type, 'Upstream request failed'),
+      );
+    }
+
+    const parsedResponse = adapter.parseResponse(transportResponse);
+
+    if (transportResponse.status < 200 || transportResponse.status >= 300) {
+      const category = adapter.classifyError({
+        status: transportResponse.status,
+        body: parsedResponse.body,
+      });
+      attempt.complete(
+        categoryToTerminalState(category),
+        transportResponse.status,
+      );
+      ctx.complete(categoryToTerminalState(category));
+      this.emit(ctx, attempt, {
+        success: false,
+        outcome: category,
+        httpStatus: transportResponse.status,
+        providerRequestId: parsedResponse.providerRequestId,
+        usage: parsedResponse.usage,
+      });
+      const mapped = categoryToChatError(category);
+      return chatErrorResponse(
+        mapped.status,
+        chatError(mapped.type, `Upstream error ${transportResponse.status}`),
+      );
+    }
+
+    attempt.complete('success', transportResponse.status);
+    ctx.complete('success');
+    this.emit(ctx, attempt, {
+      success: true,
+      outcome: 'success',
+      httpStatus: transportResponse.status,
+      providerRequestId: parsedResponse.providerRequestId,
+      providerResponseId: parsedResponse.providerResponseId,
+      stopReason: parsedResponse.stopReason,
+      usage: parsedResponse.usage,
+    });
+
+    const outHeaders: Record<string, string> = {
+      'content-type': 'application/json',
+    };
+    if (parsedResponse.providerRequestId) {
+      outHeaders['request-id'] = parsedResponse.providerRequestId;
+    }
+    if (toolsDeniedHeader) {
+      outHeaders['x-aipp-tools-denied'] = toolsDeniedHeader;
+    }
+
+    // Native upstream: forward the chat body verbatim (object or SSE).
+    if (chatNative) {
+      if (parsed.request.stream) {
+        outHeaders['content-type'] = 'text/event-stream';
+      }
+      return { status: 200, headers: outHeaders, body: transportResponse.body };
+    }
+
+    // Anthropic upstream: reconstruct a chat.completion, surfacing cache tokens
+    // (fix 1) and diagnosing dropped thinking blocks (fix 2).
+    const { result, diagnostics } = anthropicResponseToChat(
+      parsedResponse.body,
+      resolved.model,
+    );
+    if (diagnostics.length > 0) {
+      outHeaders['x-aipp-thinking-diagnostics'] = diagnostics
+        .map((d) => `${d.kind}=${d.count}`)
+        .join(', ');
+    }
+    if (parsed.request.stream) {
+      outHeaders['content-type'] = 'text/event-stream';
+      const sse = encodeChatStream(streamEventsForChatResult(result), {
+        genId: this.deps.genId,
+        now: this.deps.now,
+      });
+      return { status: 200, headers: outHeaders, body: sse };
+    }
+    const obj = buildChatCompletion(result, {
+      genId: this.deps.genId,
+      now: this.deps.now,
     });
     return { status: 200, headers: outHeaders, body: JSON.stringify(obj) };
   }
