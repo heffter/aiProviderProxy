@@ -38,7 +38,13 @@ import {
   planRoute,
   normalizeMessages,
   requiredCapabilitiesFor,
+  checkDowngrade,
+  applyDowngradeHeaders,
+  isReliabilityStatus,
+  isReliabilityCategory,
+  DEFAULT_DOWNGRADE_MAPPING,
   type RoutingDecision,
+  type FallbackTrigger,
 } from '../routing/index.js';
 import {
   anthropicError,
@@ -119,6 +125,18 @@ export interface GatewayDeps {
   toolAuthorizer?: ToolAuthorizer;
   /** Model registry for capability-aware routing; defaults to the built-ins. */
   modelRegistry?: ModelRegistry;
+  /**
+   * Current budget utilisation percent (0-100+), consulted for budget
+   * downgrade. Defaults to 0 (never downgrades). The budget ledger wiring lands
+   * with the budget subsystem; this seam keeps downgrade testable and decoupled.
+   */
+  budgetPercent?: () => number;
+  /**
+   * Ordered account labels available for a provider, used for token-pool
+   * account rotation on an auth failure. Defaults to none (no rotation). The
+   * real token-pool source is wired in a later subtask.
+   */
+  accountsFor?: (provider: string) => string[];
   clock?: Clock;
   genId?: IdGen;
   now?: () => number;
@@ -343,6 +361,17 @@ function buildResponsesEcho(request: {
   };
 }
 
+/** One planned upstream attempt: a resolved provider/model plus its linkage. */
+interface RoutingHop {
+  provider: string;
+  model: string;
+  accountLabel?: string;
+  /** Model this hop falls back FROM (set for non-primary hops). */
+  fallbackFrom?: string;
+  /** Why this hop exists (downgrade/reliability/rotation); unset for the primary. */
+  fallbackTrigger?: FallbackTrigger;
+}
+
 function categoryToTerminalState(category: ErrorCategory): TerminalState {
   switch (category) {
     case 'provider_timeout':
@@ -456,7 +485,8 @@ export class Gateway {
     );
   }
 
-  private emit(
+  private emitEvent(
+    kind: 'attempt' | 'logical_request',
     ctx: RequestContext,
     attempt: RequestContext['attempts'][number],
     input: {
@@ -472,7 +502,7 @@ export class Gateway {
     const event = buildUsageEvent({
       ctx,
       attempt,
-      eventKind: 'logical_request',
+      eventKind: kind,
       finality: 'final',
       sequence: 0,
       success: input.success,
@@ -494,11 +524,117 @@ export class Gateway {
       provenance: input.usage ? 'provider_reported' : 'local_estimate',
     });
     try {
-      this.deps.sinks?.emitLogicalRequestFinal(event);
+      if (kind === 'attempt') {
+        this.deps.sinks?.emitAttemptFinal(event);
+      } else {
+        this.deps.sinks?.emitLogicalRequestFinal(event);
+      }
       this.deps.outbox?.enqueue(event);
     } catch {
       // telemetry is best-effort and must never affect the response
     }
+  }
+
+  /** Emit the terminal event for a logical request (winner or final error). */
+  private emit(
+    ctx: RequestContext,
+    attempt: RequestContext['attempts'][number],
+    input: {
+      success: boolean;
+      outcome: string;
+      httpStatus?: number;
+      providerRequestId?: string;
+      providerResponseId?: string;
+      stopReason?: string;
+      usage?: ProviderUsage;
+    },
+  ): void {
+    this.emitEvent('logical_request', ctx, attempt, input);
+  }
+
+  /** Emit an event for a non-winning (superseded) fallback attempt. */
+  private emitAttempt(
+    ctx: RequestContext,
+    attempt: RequestContext['attempts'][number],
+    input: {
+      success: boolean;
+      outcome: string;
+      httpStatus?: number;
+      providerRequestId?: string;
+      usage?: ProviderUsage;
+    },
+  ): void {
+    this.emitEvent('attempt', ctx, attempt, input);
+  }
+
+  /** Current budget utilisation percent (0 when no source is wired). */
+  private budgetPercent(): number {
+    return this.deps.budgetPercent?.() ?? 0;
+  }
+
+  /** Ordered account labels for a provider (empty when rotation is unavailable). */
+  private accountsFor(provider: string): string[] {
+    return this.deps.accountsFor?.(provider) ?? [];
+  }
+
+  /**
+   * A single planned upstream attempt within a logical request: a resolved
+   * provider/model plus the linkage explaining why this attempt exists.
+   */
+  private nextFallbackHop(
+    category: ErrorCategory,
+    httpStatus: number | undefined,
+    queue: RoutingHop[],
+    hop: RoutingHop,
+    accountCursor: Map<string, number>,
+  ): boolean {
+    // Client and validation faults are deterministic: never retry them.
+    if (
+      category === 'client_cancelled' ||
+      category === 'client_validation_error' ||
+      category === 'client_auth_error' ||
+      category === 'policy_rejected' ||
+      category === 'capability_unsupported' ||
+      category === 'provider_validation_error' ||
+      category === 'budget_exceeded'
+    ) {
+      return false;
+    }
+    // Account rotation: on an auth failure, switch to the next account of the
+    // SAME provider/model before considering a cross-provider fallback.
+    if (category === 'provider_auth_error') {
+      const accounts = this.accountsFor(hop.provider);
+      const used = accountCursor.get(hop.provider) ?? 0;
+      if (used + 1 < accounts.length) {
+        accountCursor.set(hop.provider, used + 1);
+        queue.unshift({
+          provider: hop.provider,
+          model: hop.model,
+          accountLabel: accounts[used + 1],
+          fallbackFrom: hop.model,
+          fallbackTrigger: 'rotation',
+        });
+        return true;
+      }
+      return false;
+    }
+    // Reliability fallback: on a transient upstream failure, advance to the next
+    // queued candidate and stamp the linkage onto it.
+    const triggerStatuses =
+      this.deps.config.routing.crossProviderCascade.triggerStatuses;
+    if (
+      queue.length > 0 &&
+      (isReliabilityCategory(category) ||
+        isReliabilityStatus(httpStatus, triggerStatuses))
+    ) {
+      queue[0] = {
+        ...queue[0],
+        fallbackFrom: hop.model,
+        fallbackTrigger: 'reliability',
+      };
+      return true;
+    }
+    return false;
   }
 
   private async handleMessages(
@@ -519,7 +655,6 @@ export class Gateway {
       );
     }
     const resolved = route.primary;
-    const routing = { policy: route.policy, reason: route.reason };
 
     const ctx = new RequestContext(
       {
@@ -531,42 +666,46 @@ export class Gateway {
       { clock: this.deps.clock, genId: this.deps.genId },
     );
 
-    let adapter: ProviderAdapter;
-    try {
-      adapter = this.deps.registry.get(resolved.provider);
-    } catch (err) {
-      if (err instanceof ProviderRegistryError) {
-        const attempt = ctx.startAttempt({
-          provider: resolved.provider,
-          upstreamProtocol: 'unknown',
-          routedModel: resolved.model,
-          nativeModel: resolved.model,
-          routing,
-        });
-        attempt.complete('internal_error');
-        ctx.complete('internal_error');
-        this.emit(ctx, attempt, {
-          success: false,
-          outcome: 'capability_unsupported',
-        });
-        return errorResponse(anthropicError('not_found_error', err.message));
-      }
-      throw err;
-    }
-
-    const verbatim = resolved.provider === 'anthropic';
-    const upstreamProtocol = verbatim ? 'anthropic' : 'openai_chat';
-    const attempt = ctx.startAttempt({
-      provider: resolved.provider,
-      upstreamProtocol,
-      routedModel: resolved.model,
-      nativeModel: resolved.model,
-      routing,
+    // Budget downgrade: swap the primary model for a cheaper one when the budget
+    // threshold is crossed. The swap is a distinct, header-marked routing event
+    // (fallbackTrigger 'downgrade'), not a post-failure hop.
+    const dgCfg = this.deps.config.routing.downgrade;
+    const downgrade = checkDowngrade(resolved.model, this.budgetPercent(), {
+      enabled: dgCfg.enabled,
+      thresholdPercent: dgCfg.thresholdPercent,
+      mapping:
+        Object.keys(dgCfg.mapping).length > 0
+          ? dgCfg.mapping
+          : DEFAULT_DOWNGRADE_MAPPING,
     });
 
-    // Tool authorization: evaluate configured packs against the requested tools
-    // before forwarding (FR-TOOLS-008). Reject when every tool is denied; strip
-    // the denied subset otherwise.
+    // Ordered hop queue: the (possibly downgraded) primary, then the
+    // capability-filtered cross-provider fallbacks from the routing decision.
+    let primaryHop: RoutingHop;
+    if (downgrade.downgraded) {
+      const re = resolveModel(downgrade.newModel, {
+        overrides: this.deps.config.models.overrides,
+      }) ?? { provider: resolved.provider, model: downgrade.newModel };
+      primaryHop = {
+        provider: re.provider,
+        model: re.model,
+        fallbackFrom: downgrade.originalModel,
+        fallbackTrigger: 'downgrade',
+      };
+    } else {
+      primaryHop = { provider: resolved.provider, model: resolved.model };
+    }
+    const primaryAccounts = this.accountsFor(primaryHop.provider);
+    if (primaryAccounts.length > 0) {
+      primaryHop.accountLabel = primaryAccounts[0];
+    }
+    const queue: RoutingHop[] = [
+      primaryHop,
+      ...route.fallbacks.map((f) => ({ provider: f.provider, model: f.model })),
+    ];
+
+    // Tool authorization runs once (pack policy is provider-agnostic) against a
+    // primary attempt so a full denial is recorded and returned before dispatch.
     let toolsDeniedHeader: string | undefined;
     const requestedTools = requestedToolNames(parsed.request.tools);
     if (requestedTools.length > 0) {
@@ -577,12 +716,17 @@ export class Gateway {
         requestedTools,
       );
       if (decision.action === 'reject') {
+        const attempt = ctx.startAttempt({
+          provider: primaryHop.provider,
+          upstreamProtocol:
+            primaryHop.provider === 'anthropic' ? 'anthropic' : 'openai_chat',
+          routedModel: primaryHop.model,
+          nativeModel: primaryHop.model,
+          routing: this.hopRouting(route, primaryHop),
+        });
         attempt.complete('policy_rejected');
         ctx.complete('policy_rejected');
-        this.emit(ctx, attempt, {
-          success: false,
-          outcome: 'policy_rejected',
-        });
+        this.emit(ctx, attempt, { success: false, outcome: 'policy_rejected' });
         return errorResponse(
           anthropicError(
             'permission_error',
@@ -597,125 +741,216 @@ export class Gateway {
       }
     }
 
-    const providerRequest: CanonicalProviderRequest = verbatim
-      ? {
-          model: resolved.model,
-          stream: parsed.request.stream,
-          body: { ...parsed.request.raw, model: resolved.model },
-          headers: request.headers,
-          upstreamProtocol: 'anthropic',
+    // Attempt loop: dispatch each hop; on a transient failure fall back to the
+    // next candidate (reliability) or rotate accounts (rotation), emitting one
+    // attempt-final event per superseded hop. The winner (or the final error)
+    // emits the logical-request event.
+    const accountCursor = new Map<string, number>();
+    while (queue.length > 0) {
+      const hop = queue.shift() as RoutingHop;
+      const routingCtx = this.hopRouting(route, hop);
+
+      let adapter: ProviderAdapter;
+      try {
+        adapter = this.deps.registry.get(hop.provider);
+      } catch (err) {
+        if (err instanceof ProviderRegistryError) {
+          const attempt = ctx.startAttempt({
+            provider: hop.provider,
+            upstreamProtocol: 'unknown',
+            routedModel: hop.model,
+            nativeModel: hop.model,
+            routing: routingCtx,
+          });
+          attempt.complete('internal_error');
+          ctx.complete('internal_error');
+          this.emit(ctx, attempt, {
+            success: false,
+            outcome: 'capability_unsupported',
+          });
+          return errorResponse(anthropicError('not_found_error', err.message));
         }
-      : {
-          model: resolved.model,
-          stream: parsed.request.stream,
-          body: anthropicToOpenAIRequest(parsed.request, resolved.model)
-            .body as unknown as Record<string, unknown>,
-          headers: request.headers,
-          upstreamProtocol: 'openai_chat',
-        };
+        throw err;
+      }
 
-    // GLM (Z.ai) reasoning: map the Anthropic thinking budget onto GLM's
-    // thinking / reasoning_effort controls so glm-5.2 reasons from Claude Code
-    // (subtask 9.3).
-    if (!verbatim && resolved.provider === 'zai') {
-      Object.assign(
-        providerRequest.body,
-        anthropicThinkingToGlm(
-          (parsed.request.raw as { thinking?: unknown }).thinking,
-        ),
-      );
-    }
-
-    let transportResponse;
-    try {
-      transportResponse = await this.transport(
-        adapter.serializeRequest(providerRequest),
-        { signal: request.signal },
-      );
-    } catch (cause) {
-      // A client disconnect surfaces as an abort; disambiguate it from an
-      // upstream timeout (which the classifier cannot tell apart) so the
-      // attempt is recorded as client_cancelled (FR-ANTH-016, FR-USAGE-012).
-      const category: ErrorCategory = request.signal?.aborted
-        ? 'client_cancelled'
-        : adapter.classifyError({ cause });
-      attempt.complete(categoryToTerminalState(category));
-      ctx.complete(categoryToTerminalState(category));
-      this.emit(ctx, attempt, { success: false, outcome: category });
-      return errorResponse(
-        anthropicError(
-          categoryToAnthropicError(category),
-          'Upstream request failed',
-        ),
-      );
-    }
-
-    const parsedResponse = adapter.parseResponse(transportResponse);
-
-    if (transportResponse.status < 200 || transportResponse.status >= 300) {
-      const category = adapter.classifyError({
-        status: transportResponse.status,
-        body: parsedResponse.body,
+      const verbatim = hop.provider === 'anthropic';
+      const upstreamProtocol = verbatim ? 'anthropic' : 'openai_chat';
+      const attempt = ctx.startAttempt({
+        provider: hop.provider,
+        upstreamProtocol,
+        routedModel: hop.model,
+        nativeModel: hop.model,
+        routing: routingCtx,
       });
-      attempt.complete(
-        categoryToTerminalState(category),
-        transportResponse.status,
-      );
-      ctx.complete(categoryToTerminalState(category));
+
+      const providerRequest: CanonicalProviderRequest = verbatim
+        ? {
+            model: hop.model,
+            stream: parsed.request.stream,
+            body: { ...parsed.request.raw, model: hop.model },
+            headers: request.headers,
+            upstreamProtocol: 'anthropic',
+          }
+        : {
+            model: hop.model,
+            stream: parsed.request.stream,
+            body: anthropicToOpenAIRequest(parsed.request, hop.model)
+              .body as unknown as Record<string, unknown>,
+            headers: request.headers,
+            upstreamProtocol: 'openai_chat',
+          };
+
+      // GLM (Z.ai) reasoning: map the Anthropic thinking budget onto GLM's
+      // thinking / reasoning_effort controls (subtask 9.3).
+      if (!verbatim && hop.provider === 'zai') {
+        Object.assign(
+          providerRequest.body,
+          anthropicThinkingToGlm(
+            (parsed.request.raw as { thinking?: unknown }).thinking,
+          ),
+        );
+      }
+
+      let transportResponse;
+      try {
+        transportResponse = await this.transport(
+          adapter.serializeRequest(providerRequest),
+          { signal: request.signal },
+        );
+      } catch (cause) {
+        // A client disconnect surfaces as an abort; disambiguate it from an
+        // upstream timeout (which the classifier cannot tell apart) so the
+        // attempt is recorded as client_cancelled (FR-ANTH-016, FR-USAGE-012).
+        const category: ErrorCategory = request.signal?.aborted
+          ? 'client_cancelled'
+          : adapter.classifyError({ cause });
+        attempt.complete(categoryToTerminalState(category));
+        if (
+          this.nextFallbackHop(category, undefined, queue, hop, accountCursor)
+        ) {
+          this.emitAttempt(ctx, attempt, { success: false, outcome: category });
+          continue;
+        }
+        ctx.complete(categoryToTerminalState(category));
+        this.emit(ctx, attempt, { success: false, outcome: category });
+        return errorResponse(
+          anthropicError(
+            categoryToAnthropicError(category),
+            'Upstream request failed',
+          ),
+        );
+      }
+
+      const parsedResponse = adapter.parseResponse(transportResponse);
+
+      if (transportResponse.status < 200 || transportResponse.status >= 300) {
+        const category = adapter.classifyError({
+          status: transportResponse.status,
+          body: parsedResponse.body,
+        });
+        attempt.complete(
+          categoryToTerminalState(category),
+          transportResponse.status,
+        );
+        if (
+          this.nextFallbackHop(
+            category,
+            transportResponse.status,
+            queue,
+            hop,
+            accountCursor,
+          )
+        ) {
+          this.emitAttempt(ctx, attempt, {
+            success: false,
+            outcome: category,
+            httpStatus: transportResponse.status,
+            providerRequestId: parsedResponse.providerRequestId,
+            usage: parsedResponse.usage,
+          });
+          continue;
+        }
+        ctx.complete(categoryToTerminalState(category));
+        this.emit(ctx, attempt, {
+          success: false,
+          outcome: category,
+          httpStatus: transportResponse.status,
+          providerRequestId: parsedResponse.providerRequestId,
+          usage: parsedResponse.usage,
+        });
+        return errorResponse(
+          anthropicError(
+            categoryToAnthropicError(category),
+            `Upstream error ${transportResponse.status}`,
+          ),
+        );
+      }
+
+      // Success: this hop wins the request.
+      attempt.complete('success', transportResponse.status);
+      ctx.complete('success');
       this.emit(ctx, attempt, {
-        success: false,
-        outcome: category,
+        success: true,
+        outcome: 'success',
         httpStatus: transportResponse.status,
         providerRequestId: parsedResponse.providerRequestId,
+        providerResponseId: parsedResponse.providerResponseId,
+        stopReason: parsedResponse.stopReason,
         usage: parsedResponse.usage,
       });
-      return errorResponse(
-        anthropicError(
-          categoryToAnthropicError(category),
-          `Upstream error ${transportResponse.status}`,
-        ),
-      );
-    }
 
-    attempt.complete('success', transportResponse.status);
-    ctx.complete('success');
-    this.emit(ctx, attempt, {
-      success: true,
-      outcome: 'success',
-      httpStatus: transportResponse.status,
-      providerRequestId: parsedResponse.providerRequestId,
-      providerResponseId: parsedResponse.providerResponseId,
-      stopReason: parsedResponse.stopReason,
-      usage: parsedResponse.usage,
-    });
-
-    // Fast path: return the Anthropic body verbatim; otherwise translate.
-    const responseBody = verbatim
-      ? parsedResponse.body
-      : openAIResponseToAnthropic(parsedResponse.body, resolved.model);
-    // GLM reasoning: surface reasoning_content as a leading (unsigned) thinking
-    // block on the translated Anthropic message (subtask 9.3).
-    if (!verbatim && resolved.provider === 'zai') {
-      const block = glmReasoningToAnthropicBlock(
-        extractGlmReasoningContent(parsedResponse.body),
-      );
-      if (block) {
-        (responseBody as { content: unknown[] }).content.unshift(block);
+      // Fast path: return the Anthropic body verbatim; otherwise translate.
+      const responseBody = verbatim
+        ? parsedResponse.body
+        : openAIResponseToAnthropic(parsedResponse.body, hop.model);
+      // GLM reasoning: surface reasoning_content as a leading (unsigned) thinking
+      // block on the translated Anthropic message (subtask 9.3).
+      if (!verbatim && hop.provider === 'zai') {
+        const block = glmReasoningToAnthropicBlock(
+          extractGlmReasoningContent(parsedResponse.body),
+        );
+        if (block) {
+          (responseBody as { content: unknown[] }).content.unshift(block);
+        }
       }
+      const outHeaders: Record<string, string> = {
+        'content-type': 'application/json',
+      };
+      if (parsedResponse.providerRequestId) {
+        outHeaders['request-id'] = parsedResponse.providerRequestId;
+      }
+      if (toolsDeniedHeader) {
+        outHeaders['x-aipp-tools-denied'] = toolsDeniedHeader;
+      }
+      applyDowngradeHeaders(outHeaders, downgrade);
+      return {
+        status: 200,
+        headers: outHeaders,
+        body: JSON.stringify(responseBody),
+      };
     }
-    const outHeaders: Record<string, string> = {
-      'content-type': 'application/json',
-    };
-    if (parsedResponse.providerRequestId) {
-      outHeaders['request-id'] = parsedResponse.providerRequestId;
-    }
-    if (toolsDeniedHeader) {
-      outHeaders['x-aipp-tools-denied'] = toolsDeniedHeader;
-    }
+
+    // Unreachable: the loop returns on the terminal (last) hop.
+    throw new Error('routing exhausted without a terminal response');
+  }
+
+  /** Build the lifecycle routing context for one hop of a decision. */
+  private hopRouting(
+    route: RoutingDecision,
+    hop: RoutingHop,
+  ): {
+    policy: string;
+    reason: string;
+    fallbackFrom?: string;
+    fallbackTrigger?: string;
+    accountLabel?: string;
+  } {
     return {
-      status: 200,
-      headers: outHeaders,
-      body: JSON.stringify(responseBody),
+      policy: route.policy,
+      reason: route.reason,
+      fallbackFrom: hop.fallbackFrom,
+      fallbackTrigger: hop.fallbackTrigger,
+      accountLabel: hop.accountLabel,
     };
   }
 

@@ -121,6 +121,15 @@ export const routingSchema = z
       })
       .passthrough()
       .default({}),
+    /** Budget-driven auto-downgrade to a cheaper model (epic AIPP-10, 10.2). */
+    downgrade: z
+      .object({
+        enabled: z.boolean().default(false),
+        thresholdPercent: z.number().min(0).default(80),
+        mapping: z.record(z.string(), z.string()).default({}),
+      })
+      .passthrough()
+      .default({}),
     policy: z
       .object({ enforce: z.boolean().default(false) })
       .passthrough()

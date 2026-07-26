@@ -1,10 +1,13 @@
 /**
- * Routing-log sink (epic AIPP-3, subtask 3.4).
+ * Routing-log sink (epic AIPP-3, subtask 3.4; wired for cascade in AIPP-10, 10.2).
  *
  * Appends one JSONL v2 record per attempt to routing-log.jsonl. Records carry
- * attempt-linkage fields (logicalRequestId, attemptId, attemptIndex) so AIPP-10
- * can correlate cascade hops as structured attempts rather than console logs.
- * Content never appears here.
+ * attempt-linkage fields (logicalRequestId, attemptId, attemptIndex, fallbackFrom,
+ * fallbackTrigger) so cascade hops correlate as structured attempts rather than
+ * console logs. Superseded fallback attempts arrive as attempt-final events; the
+ * winning (or final-error) attempt arrives as the logical-request event -- both
+ * are recorded, so the log holds exactly one record per attempt. Content never
+ * appears here.
  */
 
 import { appendFileSync, mkdirSync } from 'node:fs';
@@ -71,12 +74,22 @@ export class RoutingLogSink implements UsageEventSink {
     this.path = dataFile(DATA_FILES.routingLog, options.dir);
   }
 
-  onAttemptFinal(event: CanonicalUsageEvent): void {
+  private append(event: CanonicalUsageEvent): void {
     mkdirSync(dirname(this.path), { recursive: true });
     appendFileSync(
       this.path,
       `${JSON.stringify(toRoutingLogRecord(event))}\n`,
       'utf8',
     );
+  }
+
+  /** A superseded fallback hop. */
+  onAttemptFinal(event: CanonicalUsageEvent): void {
+    this.append(event);
+  }
+
+  /** The winning (or final-error) attempt of a logical request. */
+  onLogicalRequestFinal(event: CanonicalUsageEvent): void {
+    this.append(event);
   }
 }

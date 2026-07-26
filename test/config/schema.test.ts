@@ -41,6 +41,14 @@ describe('defaultConfig', () => {
       429, 529, 503,
     ]);
   });
+
+  it('defaults the budget-downgrade block to disabled at 80%', () => {
+    expect(cfg.routing.downgrade).toMatchObject({
+      enabled: false,
+      thresholdPercent: 80,
+      mapping: {},
+    });
+  });
 });
 
 describe('server validation', () => {

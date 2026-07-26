@@ -32,3 +32,16 @@ export {
   type RoutePlannerContext,
   type ModelResolver,
 } from './engine.js';
+
+export {
+  checkDowngrade,
+  applyDowngradeHeaders,
+  isReliabilityStatus,
+  isReliabilityCategory,
+  DEFAULT_DOWNGRADE_MAPPING,
+  DEFAULT_DOWNGRADE_CONFIG,
+  RELIABILITY_TRIGGER_CATEGORIES,
+  type FallbackTrigger,
+  type DowngradeConfig,
+  type DowngradeResult,
+} from './fallback.js';
