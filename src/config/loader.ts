@@ -144,6 +144,17 @@ export function loadConfig(path: string = configPath()): LoadResult {
     );
   }
 
+  // Z.ai Coding Plan is not implemented and must not be enabled (AIPP-9, 9.5;
+  // FR-PA-ZAI-008/009). The flag exists only so the intent is explicit in config.
+  const zai = config.providers.zai as { codingPlan?: { enabled?: boolean } };
+  if (zai?.codingPlan?.enabled === true) {
+    throw new ConfigError(
+      'providers.zai.codingPlan.enabled is set, but Z.ai Coding Plan support is ' +
+        'not implemented and must not be enabled. Use a standard Z.ai API key ' +
+        '(ZAI_API_KEY); see docs/integrations/zai.md. Set it to false to start.',
+    );
+  }
+
   return { config, warnings, path };
 }
 

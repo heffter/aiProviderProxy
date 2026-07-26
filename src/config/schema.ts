@@ -72,11 +72,25 @@ export const providerSchema = z
   })
   .passthrough();
 
+/**
+ * Z.ai Coding Plan gate (epic AIPP-9, subtask 9.5; FR-PA-ZAI-008/009, NG-005).
+ * The flag exists so config is explicit, but there is no implementation behind
+ * it and startup validation rejects enabling it (see loader.ts).
+ */
+export const zaiCodingPlanSchema = z
+  .object({ enabled: z.boolean().default(false) })
+  .passthrough();
+
+/** Z.ai provider config: the base provider entry plus the Coding Plan gate. */
+export const zaiProviderSchema = providerSchema.extend({
+  codingPlan: zaiCodingPlanSchema.default({}),
+});
+
 export const providersSchema = z
   .object({
     anthropic: providerSchema.optional(),
     openai: providerSchema.optional(),
-    zai: providerSchema.optional(),
+    zai: zaiProviderSchema.optional(),
     google: providerSchema.optional(),
     ollama: providerSchema.optional(),
   })

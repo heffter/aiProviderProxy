@@ -35,7 +35,9 @@ function harness(transport: Transport) {
   const sinks = new EventSinkRegistry();
   sinks.register({
     name: 'capture',
-    onLogicalRequestFinal: (e) => events.push(e),
+    onLogicalRequestFinal: (e) => {
+      events.push(e);
+    },
   });
   const outbox = new TokemetryOutbox({ database: new Database(':memory:') });
   const gateway = createGateway({

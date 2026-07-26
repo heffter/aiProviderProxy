@@ -86,3 +86,28 @@ Run once before closing the epic; record the outcome below.
 | Date | Gateway version | Chat | Messages | Notes |
 | ---- | --------------- | ---- | -------- | ----- |
 | _(pending)_ | | | | Awaiting a run with a live ZAI_API_KEY |
+
+## Coding Plan compliance (decision record)
+
+**Decision:** aiproviderproxy does **not** proxy Z.ai *Coding Plan* subscription
+traffic. Only the standard Z.ai API (a `ZAI_API_KEY`, billed per token) is
+supported. The two are never conflated.
+
+**Why:** the Z.ai Coding Plan is a seat-based subscription intended for use
+through Z.ai's own coding tools; routing it through a third-party gateway is
+outside its intended use, and the gateway must not implement or encourage it.
+
+**How it is enforced:** the config flag `providers.zai.codingPlan.enabled`
+exists so the intent is explicit, but it has **no implementation behind it** and
+defaults to `false`. Startup validation (`loadConfig`) rejects a config that sets
+it to `true` with a clear error directing the operator to a standard API key.
+There is no code path that sends Coding Plan credentials upstream.
+
+- Date of decision: 2026-07-26.
+- Source: Z.ai Coding Plan terms of use (verify against the current published
+  terms before revisiting this decision).
+
+If this decision is ever revisited, it must be re-verified against the
+then-current Z.ai terms and recorded here with a new date and source; enabling
+the flag also requires an implementation task that keeps standard-API and
+Coding-Plan configuration strictly separate.

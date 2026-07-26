@@ -58,6 +58,34 @@ describe('path resolution', () => {
   });
 });
 
+describe('Z.ai Coding Plan gate (AIPP-9, 9.5)', () => {
+  it('rejects enabling providers.zai.codingPlan.enabled with a clear message', () => {
+    writeFileSync(
+      path,
+      JSON.stringify({ providers: { zai: { codingPlan: { enabled: true } } } }),
+      'utf8',
+    );
+    expect(() => loadConfig(path)).toThrow(ConfigError);
+    expect(() => loadConfig(path)).toThrow(
+      /Coding Plan support is not implemented/,
+    );
+  });
+
+  it('loads normally when the flag is absent or false', () => {
+    writeFileSync(
+      path,
+      JSON.stringify({ providers: { zai: { enabled: true } } }),
+      'utf8',
+    );
+    const { config } = loadConfig(path);
+    // The flag defaults to false and does not block startup.
+    expect(
+      (config.providers.zai as { codingPlan: { enabled: boolean } }).codingPlan
+        .enabled,
+    ).toBe(false);
+  });
+});
+
 describe('loadConfig', () => {
   it('returns defaults with no warnings when no file exists', () => {
     const { config, warnings } = loadConfig(path);
