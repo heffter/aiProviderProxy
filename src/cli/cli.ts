@@ -30,6 +30,13 @@ import {
 } from '../integrations/tokemetry/index.js';
 import { buildProviderRegistry, createGateway } from '../gateway/index.js';
 import {
+  contentLogDisclosure,
+  pruneHistory,
+  dataFile,
+  DATA_FILES,
+} from '../ops/index.js';
+import type { Config } from '../config/index.js';
+import {
   loadPolicyFile,
   policyFilePath,
   replayPolicy,
@@ -37,7 +44,6 @@ import {
   type ReplayRecord,
 } from '../routing/index.js';
 import { existsSync, readFileSync } from 'node:fs';
-import { dataFile, DATA_FILES } from '../ops/trackers/paths.js';
 
 /** Commands available on the new CLI surface. */
 export const COMMANDS = [
@@ -79,15 +85,48 @@ export interface CliDeps {
   startGateway?: (io: CliIO, configFile?: string) => Promise<number>;
 }
 
+/**
+ * On startup, enforce the content-log retention window and (on first run) print
+ * the privacy disclosure so operators know content may be stored locally. Both
+ * are best-effort and never block startup (epic AIPP-11, subtask 11.6).
+ */
+export function contentLogStartup(
+  io: CliIO,
+  config: Config,
+  home: string,
+  firstRun: boolean,
+): void {
+  try {
+    pruneHistory(dataFile(DATA_FILES.history, home), {
+      retentionDays: config.contentLog.retentionDays,
+      maxEntries: config.contentLog.maxEntries,
+    });
+  } catch {
+    // retention is best-effort; a prune failure must not stop the gateway
+  }
+  if (firstRun && config.contentLog.enabled) {
+    io.out(
+      contentLogDisclosure({
+        enabled: config.contentLog.enabled,
+        retentionDays: config.contentLog.retentionDays,
+        home,
+      }),
+    );
+  }
+}
+
 /** Default gateway boot: load config, build the registry, and listen. */
 async function defaultStartGateway(
   io: CliIO,
   configFile?: string,
 ): Promise<number> {
+  const path = configFile ?? configPath();
+  const firstRun = !existsSync(path);
   const { config, warnings } = loadConfig(configFile);
   for (const w of warnings) {
     io.err(`warning: ${w}`);
   }
+  contentLogStartup(io, config, configHome(), firstRun);
   const gateway = createGateway({
     config,
     registry: buildProviderRegistry(),
@@ -184,6 +223,13 @@ function cmdContentLog(args: string[], io: CliIO, file: string): number {
     const { config } = loadConfig(file);
     if (sub === 'status') {
       io.out(`content logging is ${config.contentLog.enabled ? 'on' : 'off'}`);
+      io.out(
+        contentLogDisclosure({
+          enabled: config.contentLog.enabled,
+          retentionDays: config.contentLog.retentionDays,
+          home: configHome(),
+        }),
+      );
       return 0;
     }
     config.contentLog.enabled = sub === 'on';

@@ -8,10 +8,11 @@
  * carry metadata and token counts only.
  */
 
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { UsageEventSink } from '../../lifecycle/event-sinks.js';
 import type { CanonicalUsageEvent } from '../../lifecycle/usage-event.js';
+import { restrictOwnerOnly } from '../content-log/retention.js';
 import { dataFile, DATA_FILES } from './paths.js';
 
 /** Local-only request/response content, never present in canonical events. */
@@ -90,6 +91,12 @@ export class HistorySink implements UsageEventSink {
     }
 
     mkdirSync(dirname(this.path), { recursive: true });
+    // Restrict the log to owner-only on first creation: it may hold full prompt
+    // and response content when content logging is on (NFR-PRIV-003).
+    const isNew = !existsSync(this.path);
     appendFileSync(this.path, `${JSON.stringify(entry)}\n`, 'utf8');
+    if (isNew) {
+      restrictOwnerOnly(this.path);
+    }
   }
 }
