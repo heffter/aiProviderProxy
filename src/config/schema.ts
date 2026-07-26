@@ -152,6 +152,48 @@ export const tokemetrySchema = z
   })
   .passthrough();
 
+/** A single tool entry within a pack. `inherit` defers to the pack default. */
+export const toolEntrySchema = z
+  .object({
+    name: z.string().min(1),
+    policy: z.enum(['allow', 'deny', 'inherit']).default('inherit'),
+    requiresConfirmation: z.boolean().optional(),
+  })
+  .passthrough();
+
+/** A named tool pack: an allow/deny set with a default for unlisted tools. */
+export const toolPackSchema = z
+  .object({
+    name: z.string().min(1),
+    description: z.string().default(''),
+    tools: z.array(toolEntrySchema).default([]),
+    defaultPolicy: z.enum(['allow', 'deny']).default('deny'),
+    version: z.string().default('1.0.0'),
+  })
+  .passthrough();
+
+/** Per-agent pack additions/removals and explicit tool overrides. */
+export const agentAuthConfigSchema = z
+  .object({
+    allowPacks: z.array(z.string()).default([]),
+    denyPacks: z.array(z.string()).default([]),
+    toolOverrides: z.record(z.string(), z.enum(['allow', 'deny'])).default({}),
+  })
+  .passthrough();
+
+/** Tool authorization (deny-by-default when enabled; FR-TOOLS-008). */
+export const toolsSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    /** Custom packs; overlay (and may override) the built-in packs by name. */
+    packs: z.array(toolPackSchema).default([]),
+    /** Agent auth configs keyed by agent id. */
+    agents: z.record(z.string(), agentAuthConfigSchema).default({}),
+    /** Global explicit deny list; always wins over pack/agent policy. */
+    denyList: z.array(z.string()).default([]),
+  })
+  .passthrough();
+
 export const integrationsSchema = z
   .object({ tokemetry: tokemetrySchema.default({}) })
   .passthrough();
@@ -171,6 +213,7 @@ export const configSchema = z
     anomaly: anomalySchema.default({}),
     contentLog: contentLogSchema.default({}),
     mesh: meshSchema.default({}),
+    tools: toolsSchema.default({}),
     integrations: integrationsSchema.default({}),
   })
   .passthrough();

@@ -27,6 +27,7 @@ export default defineConfig({
       'test/protocols/**/*.test.ts',
       'test/gateway/**/*.test.ts',
       'test/models/**/*.test.ts',
+      'test/tools/**/*.test.ts',
       'test/skeleton.test.ts',
     ],
     coverage: {
@@ -39,6 +40,7 @@ export default defineConfig({
         'src/models/**',
         'src/lifecycle/**',
         'src/routing/**',
+        'src/tools/**',
         'src/integrations/**',
         'src/ops/**',
         'src/config/**',

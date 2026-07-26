@@ -18,6 +18,7 @@
     "src/ops/**/*",
     "src/config/**/*",
     "src/cli/**/*",
+    "src/tools/**/*",
     "src/identity.ts",
     "src/fixtures/**/*",
     "test/fixtures/**/*",
@@ -31,6 +32,7 @@
     "test/protocols/**/*",
     "test/gateway/**/*",
     "test/models/**/*",
+    "test/tools/**/*",
     "test/skeleton.test.ts"
   ]
 }

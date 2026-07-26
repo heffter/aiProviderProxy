@@ -40,8 +40,10 @@ import {
   statusForAnthropicError,
   type AnthropicErrorEnvelope,
   type AnthropicErrorType,
+  type ParsedMessagesRequest,
 } from '../protocols/anthropic/index.js';
 import type { TokemetryOutbox } from '../integrations/tokemetry/index.js';
+import { ToolAuthorizer, decideToolEnforcement } from '../tools/index.js';
 import { httpTransport } from './transport.js';
 
 /** A gateway request (transport-agnostic). */
@@ -67,6 +69,8 @@ export interface GatewayDeps {
   transport?: Transport;
   sinks?: EventSinkRegistry;
   outbox?: TokemetryOutbox;
+  /** Tool authorization; defaults to one built from `config.tools`. */
+  toolAuthorizer?: ToolAuthorizer;
   clock?: Clock;
   genId?: IdGen;
   now?: () => number;
@@ -95,6 +99,42 @@ function json(status: number, body: unknown): GatewayResponse {
 
 function errorResponse(envelope: AnthropicErrorEnvelope): GatewayResponse {
   return json(statusForAnthropicError(envelope.error.type), envelope);
+}
+
+/** Extract the tool names from an Anthropic `tools` array (skip malformed). */
+function requestedToolNames(tools: unknown[] | undefined): string[] {
+  if (!Array.isArray(tools)) {
+    return [];
+  }
+  const names: string[] = [];
+  for (const tool of tools) {
+    const name = (tool as { name?: unknown }).name;
+    if (typeof name === 'string' && name.length > 0) {
+      names.push(name);
+    }
+  }
+  return names;
+}
+
+/**
+ * Drop denied tools from a request (both the typed `tools` and the raw body)
+ * so the model cannot call them even when only a partial set was denied.
+ */
+function stripDeniedTools(
+  request: ParsedMessagesRequest,
+  allowed: Set<string>,
+): void {
+  const keep = (tool: unknown): boolean => {
+    const name = (tool as { name?: unknown }).name;
+    return typeof name === 'string' && allowed.has(name);
+  };
+  if (Array.isArray(request.tools)) {
+    request.tools = request.tools.filter(keep);
+  }
+  const rawTools = (request.raw as { tools?: unknown }).tools;
+  if (Array.isArray(rawTools)) {
+    (request.raw as { tools: unknown[] }).tools = rawTools.filter(keep);
+  }
 }
 
 /** Map a canonical error category to an Anthropic client error type. */
@@ -138,11 +178,14 @@ function categoryToTerminalState(category: ErrorCategory): TerminalState {
 export class Gateway {
   private readonly deps: GatewayDeps;
   private readonly transport: Transport;
+  private readonly toolAuthorizer: ToolAuthorizer;
   private server?: Server;
 
   constructor(deps: GatewayDeps) {
     this.deps = deps;
     this.transport = deps.transport ?? httpTransport;
+    this.toolAuthorizer =
+      deps.toolAuthorizer ?? new ToolAuthorizer(deps.config.tools);
   }
 
   /** Handle a single request. Never throws for ordinary errors. */
@@ -274,6 +317,39 @@ export class Gateway {
       nativeModel: resolved.model,
     });
 
+    // Tool authorization: evaluate configured packs against the requested tools
+    // before forwarding (FR-TOOLS-008). Reject when every tool is denied; strip
+    // the denied subset otherwise.
+    let toolsDeniedHeader: string | undefined;
+    const requestedTools = requestedToolNames(parsed.request.tools);
+    if (requestedTools.length > 0) {
+      const decision = decideToolEnforcement(
+        this.toolAuthorizer,
+        request.headers,
+        header(request.headers, 'x-claude-code-session-id') ?? '',
+        requestedTools,
+      );
+      if (decision.action === 'reject') {
+        attempt.complete('policy_rejected');
+        ctx.complete('policy_rejected');
+        this.emit(ctx, attempt, {
+          success: false,
+          outcome: 'policy_rejected',
+        });
+        return errorResponse(
+          anthropicError(
+            'permission_error',
+            'All requested tools are denied by the active tool pack policy ' +
+              `(denied: ${decision.result.deniedHeader}).`,
+          ),
+        );
+      }
+      if (decision.action === 'strip') {
+        stripDeniedTools(parsed.request, new Set(decision.result.allowed));
+        toolsDeniedHeader = decision.result.deniedHeader;
+      }
+    }
+
     const providerRequest: CanonicalProviderRequest = verbatim
       ? {
           model: resolved.model,
@@ -363,6 +439,9 @@ export class Gateway {
     };
     if (parsedResponse.providerRequestId) {
       outHeaders['request-id'] = parsedResponse.providerRequestId;
+    }
+    if (toolsDeniedHeader) {
+      outHeaders['x-aipp-tools-denied'] = toolsDeniedHeader;
     }
     return {
       status: 200,

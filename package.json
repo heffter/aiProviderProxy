@@ -26,8 +26,8 @@
     "test:parity": "vitest run test/fixtures test/parity",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "format": "prettier --write \"src/{gateway,protocols,providers,models,lifecycle,routing,integrations,ops,config,cli,fixtures}/**/*.ts\" src/identity.ts \"test/**/*.ts\"",
-    "format:check": "prettier --check \"src/{gateway,protocols,providers,models,lifecycle,routing,integrations,ops,config,cli,fixtures}/**/*.ts\" src/identity.ts \"test/**/*.ts\"",
+    "format": "prettier --write \"src/{gateway,protocols,providers,models,lifecycle,routing,integrations,ops,config,cli,tools,fixtures}/**/*.ts\" src/identity.ts \"test/**/*.ts\"",
+    "format:check": "prettier --check \"src/{gateway,protocols,providers,models,lifecycle,routing,integrations,ops,config,cli,tools,fixtures}/**/*.ts\" src/identity.ts \"test/**/*.ts\"",
     "typecheck": "tsc -p tsconfig.gates.json",
     "test:gates": "vitest run --config vitest.gates.config.ts --coverage"
   },

@@ -25,6 +25,7 @@ export default tseslint.config(
       'src/ops/**/*.ts',
       'src/config/**/*.ts',
       'src/cli/**/*.ts',
+      'src/tools/**/*.ts',
       'src/identity.ts',
       'src/fixtures/**/*.ts',
       'test/**/*.ts',

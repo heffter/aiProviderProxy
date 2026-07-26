@@ -19,6 +19,7 @@ import { EventSinkRegistry } from '../../src/lifecycle/index.js';
 import { TokemetryOutbox } from '../../src/integrations/tokemetry/index.js';
 import type { CanonicalUsageEvent } from '../../src/lifecycle/usage-event.js';
 import type { Transport } from '../../src/providers/types.js';
+import { ToolAuthorizer } from '../../src/tools/index.js';
 
 const env = {
   ANTHROPIC_API_KEY: 'sk-ant-api03-envkey',
@@ -45,7 +46,7 @@ function post(
   };
 }
 
-function harness(transport: Transport) {
+function harness(transport: Transport, toolAuthorizer?: ToolAuthorizer) {
   const events: CanonicalUsageEvent[] = [];
   const sinks = new EventSinkRegistry();
   sinks.register({
@@ -61,6 +62,7 @@ function harness(transport: Transport) {
     transport,
     sinks,
     outbox,
+    toolAuthorizer,
   });
   return { gateway, events, sinks, outbox };
 }
@@ -272,6 +274,89 @@ describe('count_tokens passthrough', () => {
     });
     expect(res.status).toBe(400);
     expect(JSON.parse(res.body).error.type).toBe('invalid_request_error');
+  });
+});
+
+describe('tool authorization', () => {
+  const anthropicOk = {
+    id: 'msg_t',
+    type: 'message',
+    role: 'assistant',
+    content: [{ type: 'text', text: 'ok' }],
+    stop_reason: 'end_turn',
+    usage: { input_tokens: 1, output_tokens: 1 },
+  };
+  function toolPost(tools: string[]): GatewayRequest {
+    return post('claude-sonnet-4', {
+      tools: tools.map((name) => ({
+        name,
+        input_schema: { type: 'object' },
+      })),
+    });
+  }
+
+  it('forwards the allowed subset and strips denied tools', async () => {
+    let forwarded: unknown;
+    const transport: Transport = async (req) => {
+      forwarded = JSON.parse(req.body ?? '{}');
+      return {
+        status: 200,
+        headers: { 'request-id': 'req_t' },
+        body: JSON.stringify(anthropicOk),
+      };
+    };
+    const authorizer = new ToolAuthorizer({ enabled: true });
+    const { gateway } = harness(transport, authorizer);
+    const req = toolPost(['bash', 'web_search']);
+    req.headers['x-task-type'] = 'code'; // allows bash, denies web_search
+    const res = await gateway.handle(req);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['x-aipp-tools-denied']).toBe('web_search');
+    const names = (forwarded as { tools: { name: string }[] }).tools.map(
+      (t) => t.name,
+    );
+    expect(names).toEqual(['bash']); // web_search stripped from upstream body
+  });
+
+  it('rejects with 403 and a policy_rejected event when all tools denied', async () => {
+    const authorizer = new ToolAuthorizer({ enabled: true });
+    const { gateway, events } = harness(async () => {
+      throw new Error('transport must not be called');
+    }, authorizer);
+    const req = toolPost(['web_search']);
+    req.headers['x-task-type'] = 'code'; // web_search not in code pack
+    const res = await gateway.handle(req);
+
+    expect(res.status).toBe(403);
+    expect(JSON.parse(res.body).error.type).toBe('permission_error');
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      success: false,
+      outcome: 'policy_rejected',
+    });
+  });
+
+  it('does not enforce when the authorizer is disabled (default)', async () => {
+    let forwarded: unknown;
+    const transport: Transport = async (req) => {
+      forwarded = JSON.parse(req.body ?? '{}');
+      return {
+        status: 200,
+        headers: {},
+        body: JSON.stringify(anthropicOk),
+      };
+    };
+    // Default harness: config.tools.enabled is false.
+    const { gateway } = harness(transport);
+    const req = toolPost(['web_search']);
+    req.headers['x-task-type'] = 'code';
+    const res = await gateway.handle(req);
+    expect(res.status).toBe(200);
+    const names = (forwarded as { tools: { name: string }[] }).tools.map(
+      (t) => t.name,
+    );
+    expect(names).toEqual(['web_search']); // untouched
   });
 });
 
