@@ -322,6 +322,102 @@ describe('tool-router authorization', () => {
   });
 });
 
+describe('/v1/models and /v1/estimate', () => {
+  it('GET /v1/models lists models from the registry', async () => {
+    const { gateway } = harness(async () => {
+      throw new Error('transport must not be called');
+    });
+    const res = await gateway.handle({
+      method: 'GET',
+      url: '/v1/models',
+      headers: {},
+      body: '',
+    });
+    expect(res.status).toBe(200);
+    const list = JSON.parse(res.body);
+    expect(list.object).toBe('list');
+    expect(list.data.some((m: { id: string }) => m.id === 'gpt-4o')).toBe(true);
+  });
+
+  it('POST /v1/estimate returns a cost estimate without forwarding', async () => {
+    const { gateway } = harness(async () => {
+      throw new Error('transport must not be called');
+    });
+    const res = await gateway.handle({
+      method: 'POST',
+      url: '/v1/estimate',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-4o',
+        messages: [{ role: 'user', content: 'estimate me' }],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const est = JSON.parse(res.body);
+    expect(est).toMatchObject({ provider: 'openai', currency: 'USD' });
+    expect(est.estimated_cost_usd).toBeGreaterThan(0);
+  });
+
+  it('rate-limits /v1/estimate per client at 60/min', async () => {
+    const { gateway } = harness(async () => ({
+      status: 200,
+      headers: {},
+      body: '{}',
+    }));
+    const make = () => ({
+      method: 'POST',
+      url: '/v1/estimate',
+      headers: {
+        'content-type': 'application/json',
+        'x-client-id': 'rate-test',
+      },
+      body: JSON.stringify({ model: 'gpt-4o', messages: [] }),
+    });
+    let last = 200;
+    for (let i = 0; i < 62; i += 1) {
+      last = (await gateway.handle(make())).status;
+    }
+    expect(last).toBe(429);
+  });
+
+  it('rejects an unknown model in /v1/estimate', async () => {
+    const { gateway } = harness(async () => ({
+      status: 200,
+      headers: {},
+      body: '{}',
+    }));
+    const res = await gateway.handle({
+      method: 'POST',
+      url: '/v1/estimate',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'no-such-xyz', messages: [] }),
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('legacy alias deprecation (FR-CHAT-005)', () => {
+  it('accepts an rp: alias and surfaces a deprecation header', async () => {
+    const anthropicResponse = {
+      id: 'msg_rp',
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'text', text: 'ok' }],
+      stop_reason: 'end_turn',
+      usage: { input_tokens: 1, output_tokens: 1 },
+    };
+    const transport: Transport = async () => ({
+      status: 200,
+      headers: {},
+      body: JSON.stringify(anthropicResponse),
+    });
+    const { gateway } = harness(transport);
+    const res = await gateway.handle(post('rp:fast')); // -> anthropic sonnet
+    expect(res.status).toBe(200);
+    expect(res.headers['x-aipp-deprecation']).toMatch(/deprecated/);
+  });
+});
+
 describe('chat errors', () => {
   it('400s a malformed request', async () => {
     const { gateway } = harness(async () => ({

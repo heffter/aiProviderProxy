@@ -72,6 +72,11 @@ import {
   type ParsedChatRequest,
 } from '../protocols/openai-chat/index.js';
 import { ToolAuthorizer, decideToolEnforcement } from '../tools/index.js';
+import {
+  EstimateRateLimiter,
+  estimateChat,
+  listModels,
+} from './openai-endpoints.js';
 import { httpTransport } from './transport.js';
 
 /** A gateway request (transport-agnostic). */
@@ -343,6 +348,7 @@ export class Gateway {
   private readonly deps: GatewayDeps;
   private readonly transport: Transport;
   private readonly toolAuthorizer: ToolAuthorizer;
+  private readonly estimateLimiter: EstimateRateLimiter;
   private server?: Server;
 
   constructor(deps: GatewayDeps) {
@@ -350,6 +356,7 @@ export class Gateway {
     this.transport = deps.transport ?? httpTransport;
     this.toolAuthorizer =
       deps.toolAuthorizer ?? new ToolAuthorizer(deps.config.tools);
+    this.estimateLimiter = new EstimateRateLimiter({ now: deps.now });
   }
 
   /** Handle a single request. Never throws for ordinary errors. */
@@ -372,6 +379,12 @@ export class Gateway {
     }
     if (request.method === 'POST' && path === '/v1/chat/completions') {
       return this.handleChat(request);
+    }
+    if (request.method === 'GET' && path === '/v1/models') {
+      return json(200, listModels());
+    }
+    if (request.method === 'POST' && path === '/v1/estimate') {
+      return this.handleEstimate(request);
     }
     return errorResponse(
       anthropicError(
@@ -970,8 +983,12 @@ export class Gateway {
       return chatErrorResponse(parsed.status, parsed.error);
     }
 
+    // Legacy rp:/relayplane: aliases still resolve, with a deprecation warning
+    // surfaced to the client (FR-CHAT-005).
+    const deprecations: string[] = [];
     const resolved = resolveModel(parsed.request.model, {
       overrides: this.deps.config.models.overrides,
+      warn: (message) => deprecations.push(message),
     });
     if (!resolved) {
       return chatErrorResponse(
@@ -1167,6 +1184,9 @@ export class Gateway {
     if (toolsDeniedHeader) {
       outHeaders['x-aipp-tools-denied'] = toolsDeniedHeader;
     }
+    if (deprecations.length > 0) {
+      outHeaders['x-aipp-deprecation'] = deprecations.join('; ');
+    }
 
     // Verbatim upstream: forward the chat body unchanged (object or SSE).
     if (chatMode === 'verbatim') {
@@ -1222,6 +1242,71 @@ export class Gateway {
       headers: outHeaders,
       body: JSON.stringify(parsedResponse.body),
     };
+  }
+
+  /**
+   * `POST /v1/estimate` (epic AIPP-8). Pre-flight cost estimate from the
+   * advisory pricing table; never forwards to a provider. Rate-limited per
+   * client to 60/min (legacy parity).
+   */
+  private handleEstimate(request: GatewayRequest): GatewayResponse {
+    const clientKey =
+      header(request.headers, 'x-client-id') ??
+      header(request.headers, 'x-forwarded-for') ??
+      header(request.headers, 'x-claude-code-session-id') ??
+      'anonymous';
+    const limit = this.estimateLimiter.check(clientKey);
+    if (!limit.allowed) {
+      return {
+        status: 429,
+        headers: {
+          'content-type': 'application/json',
+          'retry-after': String(
+            Math.ceil((limit.retryAfterMs ?? 60_000) / 1000),
+          ),
+        },
+        body: JSON.stringify(
+          chatError(
+            'rate_limit_error',
+            'Estimate rate limit exceeded (60/min)',
+            {
+              code: 'rate_limited',
+            },
+          ),
+        ),
+      };
+    }
+
+    let body: unknown;
+    try {
+      body = JSON.parse(request.body);
+    } catch {
+      return chatErrorResponse(
+        400,
+        chatError('invalid_request_error', 'Request body is not valid JSON'),
+      );
+    }
+    const model = (body as { model?: unknown }).model;
+    if (typeof model !== 'string' || model.length === 0) {
+      return chatErrorResponse(
+        400,
+        chatError('invalid_request_error', 'model: Field required', {
+          param: 'model',
+        }),
+      );
+    }
+    const estimate = estimateChat(body as { model: string }, {
+      overrides: this.deps.config.models.overrides,
+    });
+    if (!estimate) {
+      return chatErrorResponse(
+        400,
+        chatError('invalid_request_error', `Unknown model "${model}"`, {
+          param: 'model',
+        }),
+      );
+    }
+    return json(200, estimate);
   }
 
   /** Start a node:http server bound to the configured host/port. */
