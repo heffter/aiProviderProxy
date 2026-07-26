@@ -1,9 +1,34 @@
 /**
- * Routing modes: complexity, cascade, cross-provider, budget downgrade.
+ * Routing engine: modes, complexity classification, capability-preserving
+ * candidate selection (epic AIPP-10; PRD section 11.12).
  *
- * Target-skeleton placeholder (epic AIPP-2, PRD section 10.1). Implementation
- * lands in later AIPP epics; this barrel fixes the module boundary and name.
+ * The engine (engine.ts) turns a surface-agnostic request into an ordered
+ * candidate list plus a decision record; the classifier (complexity.ts) scores
+ * prompt complexity. Structured attempt records, retry/backoff, cross-provider
+ * fallback, and live policy enforcement layer on in later subtasks.
  */
 
 /** Identifies this module within the target skeleton. */
 export const MODULE_NAME = 'routing';
+
+export {
+  classifyComplexity,
+  messageText,
+  normalizeMessages,
+  type Complexity,
+  type ClassifierMessage,
+  type ComplexityResult,
+} from './complexity.js';
+
+export {
+  planRoute,
+  filterByCapabilities,
+  knownUnsupported,
+  requiredCapabilitiesFor,
+  type RoutingRequest,
+  type RoutingDecision,
+  type RoutingCandidate,
+  type RoutingConfig,
+  type RoutePlannerContext,
+  type ModelResolver,
+} from './engine.js';

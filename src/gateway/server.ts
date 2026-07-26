@@ -32,6 +32,14 @@ import type {
   Transport,
 } from '../providers/types.js';
 import { resolveModel } from '../models/index.js';
+import { buildModelRegistry } from '../models/builtin.js';
+import type { ModelRegistry } from '../models/registry.js';
+import {
+  planRoute,
+  normalizeMessages,
+  requiredCapabilitiesFor,
+  type RoutingDecision,
+} from '../routing/index.js';
 import {
   anthropicError,
   anthropicToOpenAIRequest,
@@ -109,6 +117,8 @@ export interface GatewayDeps {
   outbox?: TokemetryOutbox;
   /** Tool authorization; defaults to one built from `config.tools`. */
   toolAuthorizer?: ToolAuthorizer;
+  /** Model registry for capability-aware routing; defaults to the built-ins. */
+  modelRegistry?: ModelRegistry;
   clock?: Clock;
   genId?: IdGen;
   now?: () => number;
@@ -353,6 +363,7 @@ export class Gateway {
   private readonly deps: GatewayDeps;
   private readonly transport: Transport;
   private readonly toolAuthorizer: ToolAuthorizer;
+  private readonly modelRegistry: ModelRegistry;
   private readonly estimateLimiter: EstimateRateLimiter;
   private server?: Server;
 
@@ -361,7 +372,53 @@ export class Gateway {
     this.transport = deps.transport ?? httpTransport;
     this.toolAuthorizer =
       deps.toolAuthorizer ?? new ToolAuthorizer(deps.config.tools);
+    this.modelRegistry = deps.modelRegistry ?? buildModelRegistry();
     this.estimateLimiter = new EstimateRateLimiter({ now: deps.now });
+  }
+
+  /**
+   * Plan the route for a request: resolve the requested model to a provider and
+   * an ordered candidate list under the active routing mode. Returns null when
+   * the requested model cannot be resolved at all (the caller surfaces the same
+   * unknown-model error it did before routing existed). The request body is read
+   * defensively so this works across all three surfaces (`messages` for
+   * Anthropic/Chat, `input` for Responses).
+   */
+  private planRouteFor(
+    requestedModel: string,
+    raw: unknown,
+    warn?: (message: string) => void,
+  ): RoutingDecision | null {
+    const body = (raw ?? {}) as Record<string, unknown>;
+    const source = Array.isArray(body.messages)
+      ? body.messages
+      : Array.isArray(body.input)
+        ? body.input
+        : [];
+    const messages = normalizeMessages(
+      source as Array<{ role?: string; content?: unknown }>,
+    );
+    const hasTools = Array.isArray(body.tools) && body.tools.length > 0;
+    const hasReasoning =
+      body.thinking != null ||
+      body.reasoning != null ||
+      body.reasoning_effort != null;
+    return planRoute(
+      {
+        requestedModel,
+        messages,
+        requiredCapabilities: requiredCapabilitiesFor({
+          tools: hasTools,
+          reasoning: hasReasoning,
+        }),
+      },
+      {
+        routing: this.deps.config.routing,
+        overrides: this.deps.config.models.overrides,
+        registry: this.modelRegistry,
+        warn,
+      },
+    );
   }
 
   /** Handle a single request. Never throws for ordinary errors. */
@@ -452,10 +509,8 @@ export class Gateway {
       return errorResponse(parsed.error);
     }
 
-    const resolved = resolveModel(parsed.request.model, {
-      overrides: this.deps.config.models.overrides,
-    });
-    if (!resolved) {
+    const route = this.planRouteFor(parsed.request.model, parsed.request.raw);
+    if (!route) {
       return errorResponse(
         anthropicError(
           'invalid_request_error',
@@ -463,6 +518,8 @@ export class Gateway {
         ),
       );
     }
+    const resolved = route.primary;
+    const routing = { policy: route.policy, reason: route.reason };
 
     const ctx = new RequestContext(
       {
@@ -484,6 +541,7 @@ export class Gateway {
           upstreamProtocol: 'unknown',
           routedModel: resolved.model,
           nativeModel: resolved.model,
+          routing,
         });
         attempt.complete('internal_error');
         ctx.complete('internal_error');
@@ -503,6 +561,7 @@ export class Gateway {
       upstreamProtocol,
       routedModel: resolved.model,
       nativeModel: resolved.model,
+      routing,
     });
 
     // Tool authorization: evaluate configured packs against the requested tools
@@ -766,10 +825,8 @@ export class Gateway {
       return responsesErrorResponse(parsed.status, parsed.error);
     }
 
-    const resolved = resolveModel(parsed.request.model, {
-      overrides: this.deps.config.models.overrides,
-    });
-    if (!resolved) {
+    const route = this.planRouteFor(parsed.request.model, parsed.request.raw);
+    if (!route) {
       return responsesErrorResponse(
         400,
         responsesError(
@@ -779,6 +836,8 @@ export class Gateway {
         ),
       );
     }
+    const resolved = route.primary;
+    const routing = { policy: route.policy, reason: route.reason };
 
     const sessionId = header(request.headers, 'x-claude-code-session-id');
     const ctx = new RequestContext(
@@ -801,6 +860,7 @@ export class Gateway {
           upstreamProtocol: 'unknown',
           routedModel: resolved.model,
           nativeModel: resolved.model,
+          routing,
         });
         attempt.complete('internal_error');
         ctx.complete('internal_error');
@@ -824,6 +884,7 @@ export class Gateway {
       upstreamProtocol: native ? 'openai_responses' : 'openai_chat',
       routedModel: resolved.model,
       nativeModel: resolved.model,
+      routing,
     });
 
     // Tool-router authorization on the requested function tools (FR-TOOLS-008).
@@ -1013,11 +1074,12 @@ export class Gateway {
     // Legacy rp:/relayplane: aliases still resolve, with a deprecation warning
     // surfaced to the client (FR-CHAT-005).
     const deprecations: string[] = [];
-    const resolved = resolveModel(parsed.request.model, {
-      overrides: this.deps.config.models.overrides,
-      warn: (message) => deprecations.push(message),
-    });
-    if (!resolved) {
+    const route = this.planRouteFor(
+      parsed.request.model,
+      parsed.request.raw,
+      (message) => deprecations.push(message),
+    );
+    if (!route) {
       return chatErrorResponse(
         400,
         chatError(
@@ -1027,6 +1089,8 @@ export class Gateway {
         ),
       );
     }
+    const resolved = route.primary;
+    const routing = { policy: route.policy, reason: route.reason };
 
     const sessionId = header(request.headers, 'x-claude-code-session-id');
     const ctx = new RequestContext(
@@ -1049,6 +1113,7 @@ export class Gateway {
           upstreamProtocol: 'unknown',
           routedModel: resolved.model,
           nativeModel: resolved.model,
+          routing,
         });
         attempt.complete('internal_error');
         ctx.complete('internal_error');
@@ -1080,6 +1145,7 @@ export class Gateway {
       upstreamProtocol,
       routedModel: resolved.model,
       nativeModel: resolved.model,
+      routing,
     });
 
     // Tool-router authorization on the requested function tools (FR-TOOLS-008).
