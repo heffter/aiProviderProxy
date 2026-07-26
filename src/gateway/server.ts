@@ -71,6 +71,11 @@ import {
   type ChatErrorType,
   type ParsedChatRequest,
 } from '../protocols/openai-chat/index.js';
+import {
+  anthropicThinkingToGlm,
+  extractGlmReasoningContent,
+  glmReasoningToAnthropicBlock,
+} from '../providers/zai/index.js';
 import { ToolAuthorizer, decideToolEnforcement } from '../tools/index.js';
 import {
   EstimateRateLimiter,
@@ -550,6 +555,18 @@ export class Gateway {
           upstreamProtocol: 'openai_chat',
         };
 
+    // GLM (Z.ai) reasoning: map the Anthropic thinking budget onto GLM's
+    // thinking / reasoning_effort controls so glm-5.2 reasons from Claude Code
+    // (subtask 9.3).
+    if (!verbatim && resolved.provider === 'zai') {
+      Object.assign(
+        providerRequest.body,
+        anthropicThinkingToGlm(
+          (parsed.request.raw as { thinking?: unknown }).thinking,
+        ),
+      );
+    }
+
     let transportResponse;
     try {
       transportResponse = await this.transport(
@@ -617,6 +634,16 @@ export class Gateway {
     const responseBody = verbatim
       ? parsedResponse.body
       : openAIResponseToAnthropic(parsedResponse.body, resolved.model);
+    // GLM reasoning: surface reasoning_content as a leading (unsigned) thinking
+    // block on the translated Anthropic message (subtask 9.3).
+    if (!verbatim && resolved.provider === 'zai') {
+      const block = glmReasoningToAnthropicBlock(
+        extractGlmReasoningContent(parsedResponse.body),
+      );
+      if (block) {
+        (responseBody as { content: unknown[] }).content.unshift(block);
+      }
+    }
     const outHeaders: Record<string, string> = {
       'content-type': 'application/json',
     };

@@ -4,3 +4,4 @@
 
 export * from './adapter.js';
 export * from './extensions.js';
+export * from './reasoning.js';
