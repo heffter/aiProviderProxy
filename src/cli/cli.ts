@@ -10,7 +10,6 @@
  * driven in tests without spawning processes or touching the real home dir.
  */
 
-import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { BIN_NAME, DISPLAY_NAME, PRODUCT_NAME } from '../identity.js';
 import {
@@ -81,8 +80,6 @@ export interface CliIO {
 /** Injectable dependencies for {@link runCli}. */
 export interface CliDeps {
   io?: CliIO;
-  /** Runs the legacy proxy for `start --legacy`; injected in tests. */
-  runLegacy?: (args: string[]) => Promise<number>;
   /** Config file path override (else resolved from env). */
   configFile?: string;
   /** Opens the Tokemetry outbox; injected in tests. */
@@ -156,21 +153,6 @@ function defaultIO(): CliIO {
   };
 }
 
-function legacyCliPath(): string {
-  // Resolves to dist/cli.js when running from the built dist/cli/ directory.
-  return join(__dirname, '..', 'cli.js');
-}
-
-function defaultRunLegacy(args: string[]): Promise<number> {
-  return new Promise((resolve) => {
-    const child = spawn(process.execPath, [legacyCliPath(), 'start', ...args], {
-      stdio: 'inherit',
-    });
-    child.on('exit', (code) => resolve(code ?? 0));
-    child.on('error', () => resolve(1));
-  });
-}
-
 function helpText(): string {
   return [
     `${DISPLAY_NAME} (${PRODUCT_NAME}) — ${BIN_NAME}`,
@@ -178,7 +160,7 @@ function helpText(): string {
     'Usage: aipp <command> [options]',
     '',
     'Commands:',
-    '  start [--legacy]          Start the gateway (--legacy runs the old proxy)',
+    '  start                     Start the gateway',
     '  config show               Print the effective config with secrets redacted',
     '  content-log on|off|status Toggle or show request/response content logging',
     '  tokemetry status|dlq      Show exporter health or dead-lettered events',
@@ -198,14 +180,10 @@ function cmdVersion(io: CliIO): number {
 }
 
 async function cmdStart(
-  args: string[],
+  _args: string[],
   io: CliIO,
   deps: CliDeps,
 ): Promise<number> {
-  const runLegacy = deps.runLegacy ?? defaultRunLegacy;
-  if (args.includes('--legacy')) {
-    return runLegacy(args.filter((a) => a !== '--legacy'));
-  }
   const start = deps.startGateway ?? defaultStartGateway;
   return start(io, deps.configFile);
 }

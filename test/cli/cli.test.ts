@@ -34,7 +34,6 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-const stubLegacy = vi.fn(async () => 0);
 const stubStartGateway = vi.fn(async (sink: CliIO) => {
   sink.out('gateway started (stub)');
   return 0;
@@ -44,7 +43,6 @@ function run(argv: string[]): Promise<number> {
   return runCli(argv, {
     io,
     configFile,
-    runLegacy: stubLegacy,
     startGateway: stubStartGateway,
   });
 }
@@ -83,20 +81,10 @@ describe('removed cloud commands', () => {
 });
 
 describe('start', () => {
-  it('boots the gateway and does not run legacy', async () => {
+  it('boots the gateway', async () => {
     stubStartGateway.mockClear();
-    stubLegacy.mockClear();
     expect(await run(['start'])).toBe(0);
     expect(stubStartGateway).toHaveBeenCalled();
-    expect(stubLegacy).not.toHaveBeenCalled();
-  });
-
-  it('delegates to the legacy runner with --legacy', async () => {
-    stubLegacy.mockClear();
-    stubStartGateway.mockClear();
-    expect(await run(['start', '--legacy', '--port', '4100'])).toBe(0);
-    expect(stubLegacy).toHaveBeenCalledWith(['--port', '4100']);
-    expect(stubStartGateway).not.toHaveBeenCalled();
   });
 });
 
@@ -167,7 +155,6 @@ describe('migrate-from-relayplane', () => {
     // no source config -> importer warns but writes defaults
     const code = await runCli(['migrate-from-relayplane'], {
       io,
-      runLegacy: stubLegacy,
     });
     expect(code).toBe(0);
     expect(out.join('\n')).toContain('Migrated RelayPlane config');
@@ -177,9 +164,7 @@ describe('migrate-from-relayplane', () => {
 describe('default IO path', () => {
   it('runs version through the default stdout sink without throwing', async () => {
     // No injected io/configFile: exercises the defaults for a config-free command.
-    await expect(runCli(['version'], { runLegacy: stubLegacy })).resolves.toBe(
-      0,
-    );
+    await expect(runCli(['version'], {})).resolves.toBe(0);
   });
 });
 
@@ -213,7 +198,6 @@ describe('network egress guard', () => {
       await runCli(argv, {
         io,
         configFile,
-        runLegacy: stubLegacy,
         startGateway: stubStartGateway,
       });
     }
