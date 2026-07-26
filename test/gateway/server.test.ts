@@ -216,6 +216,98 @@ describe('real HTTP boot (listen)', () => {
   });
 });
 
+describe('count_tokens passthrough', () => {
+  function countPost(model: string): GatewayRequest {
+    return {
+      method: 'POST',
+      url: '/v1/messages/count_tokens',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    };
+  }
+
+  it('forwards to the Anthropic count_tokens endpoint verbatim', async () => {
+    const transport: Transport = async (req) => {
+      expect(req.url).toBe(
+        'https://api.anthropic.com/v1/messages/count_tokens',
+      );
+      return {
+        status: 200,
+        headers: { 'request-id': 'req_ct' },
+        body: JSON.stringify({ input_tokens: 42 }),
+      };
+    };
+    const { gateway } = harness(transport);
+    const res = await gateway.handle(countPost('claude-sonnet-4'));
+    expect(res.status).toBe(200);
+    expect(res.headers['request-id']).toBe('req_ct');
+    expect(JSON.parse(res.body)).toEqual({ input_tokens: 42 });
+  });
+
+  it('rejects count_tokens for a non-Anthropic model', async () => {
+    const { gateway } = harness(async () => {
+      throw new Error('transport must not be called');
+    });
+    const res = await gateway.handle(countPost('gpt-4o'));
+    expect(res.status).toBe(400);
+    const err = JSON.parse(res.body).error;
+    expect(err.type).toBe('invalid_request_error');
+    expect(err.message).toContain('only supported for Anthropic');
+  });
+
+  it('rejects a non-JSON count_tokens body', async () => {
+    const { gateway } = harness(async () => ({
+      status: 200,
+      headers: {},
+      body: '{}',
+    }));
+    const res = await gateway.handle({
+      method: 'POST',
+      url: '/v1/messages/count_tokens',
+      headers: {},
+      body: 'not json',
+    });
+    expect(res.status).toBe(400);
+    expect(JSON.parse(res.body).error.type).toBe('invalid_request_error');
+  });
+});
+
+describe('client-disconnect cancellation', () => {
+  it('aborts the upstream and records a cancelled usage event', async () => {
+    const controller = new AbortController();
+    let sawSignal: AbortSignal | undefined;
+    // A transport that only settles when its signal aborts.
+    const transport: Transport = (_req, options) => {
+      sawSignal = options?.signal;
+      return new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener('abort', () => {
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+        });
+      });
+    };
+    const { gateway, events } = harness(transport);
+
+    const pending = gateway.handle({
+      ...post('claude-sonnet-4'),
+      signal: controller.signal,
+    });
+    // Client disconnects mid-flight.
+    controller.abort();
+    const res = await pending;
+
+    expect(sawSignal).toBe(controller.signal); // signal threaded to upstream
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      success: false,
+      outcome: 'client_cancelled',
+    });
+  });
+});
+
 describe('errors', () => {
   it('returns a 400 invalid_request_error on a bad request', async () => {
     const { gateway } = harness(async () => ({

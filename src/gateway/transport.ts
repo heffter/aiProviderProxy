@@ -10,11 +10,12 @@
 import type { Transport } from '../providers/types.js';
 
 /** Perform provider requests using the global fetch implementation. */
-export const httpTransport: Transport = async (request) => {
+export const httpTransport: Transport = async (request, options) => {
   const response = await fetch(request.url, {
     method: request.method,
     headers: request.headers,
     body: request.body,
+    signal: options?.signal,
   });
   const headers: Record<string, string> = {};
   response.headers.forEach((value, key) => {

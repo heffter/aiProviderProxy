@@ -50,6 +50,8 @@ export interface GatewayRequest {
   url: string;
   headers: Record<string, string>;
   body: string;
+  /** Aborted when the client disconnects; cancels the upstream request. */
+  signal?: AbortSignal;
 }
 
 /** A gateway response. */
@@ -154,6 +156,9 @@ export class Gateway {
     }
     if (request.method === 'POST' && path === '/v1/messages') {
       return this.handleMessages(request);
+    }
+    if (request.method === 'POST' && path === '/v1/messages/count_tokens') {
+      return this.handleCountTokens(request);
     }
     return errorResponse(
       anthropicError(
@@ -290,9 +295,15 @@ export class Gateway {
     try {
       transportResponse = await this.transport(
         adapter.serializeRequest(providerRequest),
+        { signal: request.signal },
       );
     } catch (cause) {
-      const category = adapter.classifyError({ cause });
+      // A client disconnect surfaces as an abort; disambiguate it from an
+      // upstream timeout (which the classifier cannot tell apart) so the
+      // attempt is recorded as client_cancelled (FR-ANTH-016, FR-USAGE-012).
+      const category: ErrorCategory = request.signal?.aborted
+        ? 'client_cancelled'
+        : adapter.classifyError({ cause });
       attempt.complete(categoryToTerminalState(category));
       ctx.complete(categoryToTerminalState(category));
       this.emit(ctx, attempt, { success: false, outcome: category });
@@ -360,10 +371,107 @@ export class Gateway {
     };
   }
 
+  /**
+   * Anthropic `POST /v1/messages/count_tokens` passthrough. Anthropic-only:
+   * requests routed to any other provider get an explicit capability error
+   * rather than a misrouted or bogus count (port of legacy
+   * standalone-proxy.ts:6253-6269).
+   */
+  private async handleCountTokens(
+    request: GatewayRequest,
+  ): Promise<GatewayResponse> {
+    let body: unknown;
+    try {
+      body = JSON.parse(request.body);
+    } catch {
+      return errorResponse(
+        anthropicError('invalid_request_error', 'Request body is not JSON'),
+      );
+    }
+    const model = (body as { model?: unknown }).model;
+    if (typeof model !== 'string') {
+      return errorResponse(
+        anthropicError('invalid_request_error', 'Missing "model"'),
+      );
+    }
+
+    const resolved = resolveModel(model, {
+      overrides: this.deps.config.models.overrides,
+    });
+    if (!resolved) {
+      return errorResponse(
+        anthropicError('invalid_request_error', `Unknown model "${model}"`),
+      );
+    }
+    if (resolved.provider !== 'anthropic') {
+      return errorResponse(
+        anthropicError(
+          'invalid_request_error',
+          `count_tokens is only supported for Anthropic models, ` +
+            `not "${model}" (provider "${resolved.provider}")`,
+        ),
+      );
+    }
+    if (!this.deps.registry.has('anthropic')) {
+      return errorResponse(
+        anthropicError('not_found_error', 'Anthropic provider not configured'),
+      );
+    }
+
+    const adapter = this.deps.registry.get('anthropic');
+    // Reuse the adapter's authed serialization for /messages, then retarget the
+    // path to the count_tokens endpoint.
+    const serialized = adapter.serializeRequest({
+      model: resolved.model,
+      stream: false,
+      body: { ...(body as Record<string, unknown>), model: resolved.model },
+      headers: request.headers,
+      upstreamProtocol: 'anthropic',
+    });
+    let transportResponse;
+    try {
+      transportResponse = await this.transport(
+        { ...serialized, url: `${serialized.url}/count_tokens` },
+        { signal: request.signal },
+      );
+    } catch (cause) {
+      const category: ErrorCategory = request.signal?.aborted
+        ? 'client_cancelled'
+        : adapter.classifyError({ cause });
+      return errorResponse(
+        anthropicError(
+          categoryToAnthropicError(category),
+          'Upstream count_tokens request failed',
+        ),
+      );
+    }
+    const outHeaders: Record<string, string> = {
+      'content-type': 'application/json',
+    };
+    const requestId =
+      transportResponse.headers['request-id'] ??
+      transportResponse.headers['anthropic-request-id'];
+    if (requestId) {
+      outHeaders['request-id'] = requestId;
+    }
+    return {
+      status: transportResponse.status,
+      headers: outHeaders,
+      body: transportResponse.body,
+    };
+  }
+
   /** Start a node:http server bound to the configured host/port. */
   async listen(): Promise<{ host: string; port: number }> {
     const { host, port } = this.deps.config.server;
     this.server = createServer((req, res) => {
+      // Abort the upstream request if the client hangs up before we respond.
+      const controller = new AbortController();
+      res.on('close', () => {
+        if (!res.writableEnded) {
+          controller.abort();
+        }
+      });
       let body = '';
       req.on('data', (c) => {
         body += c;
@@ -374,7 +482,11 @@ export class Gateway {
           url: req.url ?? '/',
           headers: req.headers as Record<string, string>,
           body,
+          signal: controller.signal,
         }).then((response) => {
+          if (res.writableEnded || controller.signal.aborted) {
+            return; // client already gone; nothing to write
+          }
           res.writeHead(response.status, response.headers);
           res.end(response.body);
         });

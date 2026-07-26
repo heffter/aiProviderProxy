@@ -72,9 +72,16 @@ export interface TransportResponse {
   body: string;
 }
 
+/** Per-call transport options. */
+export interface TransportOptions {
+  /** Aborts the in-flight request (e.g. on client disconnect). */
+  signal?: AbortSignal;
+}
+
 /** Injectable transport used by adapters. */
 export type Transport = (
   request: TransportRequest,
+  options?: TransportOptions,
 ) => Promise<TransportResponse>;
 
 /** Provider-neutral request the adapter serializes to its wire format. */
