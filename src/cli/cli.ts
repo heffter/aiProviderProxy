@@ -56,6 +56,7 @@ export const COMMANDS = [
   'policy',
   'alerts',
   'cache',
+  'mesh',
   'migrate-from-relayplane',
   'version',
   'help',
@@ -181,6 +182,7 @@ function helpText(): string {
     '  policy replay             Simulate a policy over the routing log',
     '  alerts recent|counts      Show recent alerts or counts by type',
     '  cache stats|clear         Show cache stats or clear the cache',
+    '  mesh status|on|off        Toggle the local mesh learning store',
     '  migrate-from-relayplane   Import an existing ~/.relayplane install',
     '  version                   Print the version',
     '  help                      Show this help',
@@ -440,6 +442,33 @@ function cmdCache(args: string[], io: CliIO, file: string): number {
   }
 }
 
+/**
+ * `aipp mesh status|on|off` -- toggle the LOCAL mesh learning store. The legacy
+ * sync/contribute commands are gone with the remote-sync deletion; this command
+ * only edits local config and performs no network egress.
+ */
+function cmdMesh(args: string[], io: CliIO, file: string): number {
+  const sub = args[0];
+  if (sub !== 'status' && sub !== 'on' && sub !== 'off') {
+    io.err('usage: aipp mesh status|on|off');
+    return 2;
+  }
+  try {
+    const { config } = loadConfig(file);
+    if (sub === 'status') {
+      io.out(`mesh is ${config.mesh.enabled ? 'on' : 'off'} (local-only)`);
+      return 0;
+    }
+    config.mesh.enabled = sub === 'on';
+    saveConfig(config, file);
+    io.out(`mesh is now ${sub}`);
+    return 0;
+  } catch (err) {
+    io.err(`error: ${redactError(err)}`);
+    return 1;
+  }
+}
+
 function cmdMigrate(args: string[], io: CliIO): number {
   try {
     const result = migrateFromRelayplane({ force: args.includes('--force') });
@@ -502,6 +531,8 @@ export async function runCli(
       return cmdAlerts(args, io, file);
     case 'cache':
       return cmdCache(args, io, file);
+    case 'mesh':
+      return cmdMesh(args, io, file);
     case 'migrate-from-relayplane':
       return cmdMigrate(args, io);
     default:

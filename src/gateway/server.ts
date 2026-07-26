@@ -101,6 +101,8 @@ import {
 import { ToolAuthorizer, decideToolEnforcement } from '../tools/index.js';
 import type { BudgetManager } from '../ops/budget/index.js';
 import { computeCacheKey, type ResponseCache } from '../ops/cache/index.js';
+import type { MeshStore } from '../ops/mesh/index.js';
+import { isLoopbackHost } from '../config/loader.js';
 import {
   EstimateRateLimiter,
   estimateChat,
@@ -154,6 +156,11 @@ export interface GatewayDeps {
    */
   cache?: ResponseCache;
   /**
+   * Local mesh/osmosis store. When present and `mesh.enabled`, exposes the
+   * read-only memory endpoints behind the management-auth rule. No network I/O.
+   */
+  mesh?: MeshStore;
+  /**
    * Ordered account labels available for a provider, used for token-pool
    * account rotation on an auth failure. Defaults to none (no rotation). The
    * real token-pool source is wired in a later subtask.
@@ -195,6 +202,43 @@ function json(status: number, body: unknown): GatewayResponse {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   };
+}
+
+/**
+ * The management-endpoint authorization rule (FR-AUTH-012): allowed when the
+ * gateway is bound to loopback (all callers are local), or when a non-loopback
+ * deployment presents the configured access token. Applies to dashboard,
+ * control, and memory endpoints.
+ */
+function managementAuthorized(
+  headers: Record<string, string>,
+  config: Config,
+): boolean {
+  if (isLoopbackHost(config.server.host)) {
+    return true;
+  }
+  const token = config.server.accessToken;
+  if (!token) {
+    return false;
+  }
+  const auth = header(headers, 'authorization');
+  const bearer = auth?.startsWith('Bearer ') ? auth.slice(7) : undefined;
+  return bearer === token || header(headers, 'x-aipp-token') === token;
+}
+
+/** Query-string value from a URL, or undefined. */
+function queryParam(url: string, name: string): string | undefined {
+  const q = url.split('?')[1];
+  if (!q) {
+    return undefined;
+  }
+  for (const pair of q.split('&')) {
+    const [k, v] = pair.split('=');
+    if (k === name) {
+      return v ? decodeURIComponent(v) : '';
+    }
+  }
+  return undefined;
 }
 
 function errorResponse(envelope: AnthropicErrorEnvelope): GatewayResponse {
@@ -585,12 +629,43 @@ export class Gateway {
     if (request.method === 'POST' && path === '/v1/estimate') {
       return this.handleEstimate(request);
     }
+    if (
+      request.method === 'GET' &&
+      (path === '/v1/mesh/stats' ||
+        path === '/v1/memory/semantic' ||
+        path === '/v1/memory/episodic')
+    ) {
+      return this.handleMemory(request, path);
+    }
     return errorResponse(
       anthropicError(
         'not_found_error',
         `No route for ${request.method} ${path}`,
       ),
     );
+  }
+
+  /**
+   * Read-only local memory endpoints (mesh stats, semantic and episodic
+   * memory). Behind the management-auth rule; 404 when mesh is disabled or no
+   * store is wired. Never performs network I/O.
+   */
+  private handleMemory(request: GatewayRequest, path: string): GatewayResponse {
+    if (!managementAuthorized(request.headers, this.deps.config)) {
+      return json(403, { error: 'management endpoint requires authorization' });
+    }
+    if (!this.deps.mesh || !this.deps.config.mesh.enabled) {
+      return json(404, { error: 'mesh is disabled' });
+    }
+    const store = this.deps.mesh;
+    if (path === '/v1/mesh/stats') {
+      return json(200, store.stats());
+    }
+    if (path === '/v1/memory/semantic') {
+      return json(200, { atoms: store.querySemantic() });
+    }
+    const session = queryParam(request.url, 'session');
+    return json(200, { events: store.queryEpisodic(session) });
   }
 
   private emitEvent(
