@@ -189,12 +189,25 @@ export const cacheSchema = z
   .object({ enabled: z.boolean().default(true) })
   .passthrough();
 
+/** Alerting (epic AIPP-11, subtask 11.3): threshold/anomaly/breach + opt-in webhook. */
 export const alertsSchema = z
-  .object({ enabled: z.boolean().default(false) })
+  .object({
+    enabled: z.boolean().default(false),
+    webhookUrl: z.string().url().optional(),
+    cooldownMs: z.number().int().min(0).default(300_000),
+    maxHistory: z.number().int().positive().default(500),
+  })
   .passthrough();
 
+/** Anomaly detection (epic AIPP-11, subtask 11.3): sliding-window heuristics. */
 export const anomalySchema = z
-  .object({ enabled: z.boolean().default(false) })
+  .object({
+    enabled: z.boolean().default(false),
+    velocityThreshold: z.number().int().positive().default(50),
+    tokenExplosionUsd: z.number().nonnegative().default(5),
+    repetitionThreshold: z.number().int().positive().default(20),
+    windowMs: z.number().int().positive().default(300_000),
+  })
   .passthrough();
 
 export const contentLogSchema = z

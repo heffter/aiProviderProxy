@@ -34,6 +34,7 @@ import {
   pruneHistory,
   dataFile,
   DATA_FILES,
+  AlertManager,
 } from '../ops/index.js';
 import type { Config } from '../config/index.js';
 import {
@@ -52,6 +53,7 @@ export const COMMANDS = [
   'content-log',
   'tokemetry',
   'policy',
+  'alerts',
   'migrate-from-relayplane',
   'version',
   'help',
@@ -175,6 +177,7 @@ function helpText(): string {
     '  content-log on|off|status Toggle or show request/response content logging',
     '  tokemetry status|dlq      Show exporter health or dead-lettered events',
     '  policy replay             Simulate a policy over the routing log',
+    '  alerts recent|counts      Show recent alerts or counts by type',
     '  migrate-from-relayplane   Import an existing ~/.relayplane install',
     '  version                   Print the version',
     '  help                      Show this help',
@@ -353,6 +356,48 @@ function cmdPolicy(args: string[], io: CliIO): number {
   return 0;
 }
 
+/**
+ * `aipp alerts recent|counts` -- read-only view of the local alert history. It
+ * never delivers webhooks or performs any network egress.
+ */
+function cmdAlerts(args: string[], io: CliIO, file: string): number {
+  const sub = args[0];
+  if (sub !== 'recent' && sub !== 'counts') {
+    io.err('usage: aipp alerts recent|counts');
+    return 2;
+  }
+  try {
+    const { config } = loadConfig(file);
+    const manager = new AlertManager({
+      enabled: config.alerts.enabled,
+      cooldownMs: config.alerts.cooldownMs,
+      maxHistory: config.alerts.maxHistory,
+    });
+    try {
+      if (sub === 'counts') {
+        const counts = manager.getCounts();
+        io.out(
+          `threshold: ${counts.threshold}  anomaly: ${counts.anomaly}  breach: ${counts.breach}`,
+        );
+      } else {
+        const recent = manager.getRecent(20);
+        if (recent.length === 0) {
+          io.out('no alerts recorded');
+        }
+        for (const a of recent) {
+          io.out(`[${a.severity}] ${a.type}: ${a.message}`);
+        }
+      }
+      return 0;
+    } finally {
+      manager.close();
+    }
+  } catch (err) {
+    io.err(`error: ${redactError(err)}`);
+    return 1;
+  }
+}
+
 function cmdMigrate(args: string[], io: CliIO): number {
   try {
     const result = migrateFromRelayplane({ force: args.includes('--force') });
@@ -411,6 +456,8 @@ export async function runCli(
       return cmdTokemetry(args, io, deps);
     case 'policy':
       return cmdPolicy(args, io);
+    case 'alerts':
+      return cmdAlerts(args, io, file);
     case 'migrate-from-relayplane':
       return cmdMigrate(args, io);
     default:
