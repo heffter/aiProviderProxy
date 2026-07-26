@@ -30,6 +30,10 @@ import {
   type ClassifierMessage,
   type Complexity,
 } from './complexity.js';
+import {
+  crossProviderCandidates,
+  type ModelFamilyMapping,
+} from './cross-provider.js';
 
 /** The routing sub-config (`config.routing`). */
 export type RoutingConfig = Config['routing'];
@@ -225,6 +229,32 @@ export function planRoute(
       reason = 'cascade';
     } else {
       reason = 'cascade:unconfigured';
+    }
+  }
+
+  // Cross-provider fallback (FR-ROUTE-003/010): when enabled, append
+  // capability-preserving candidates on other providers that have an explicit
+  // family mapping. Disabled by default (behaviour can materially change).
+  const xcascade = ctx.routing.crossProviderCascade as {
+    enabled?: boolean;
+    providers?: string[];
+    modelMapping?: ModelFamilyMapping;
+  };
+  if (xcascade.enabled && (xcascade.providers?.length ?? 0) > 0) {
+    const seen = new Set(
+      [primary, ...fallbacks].map((c) => `${c.provider}:${c.model}`),
+    );
+    for (const candidate of crossProviderCandidates(primary, {
+      providers: xcascade.providers ?? [],
+      requiredCapabilities: req.requiredCapabilities,
+      registry: ctx.registry,
+      custom: xcascade.modelMapping,
+    })) {
+      const key = `${candidate.provider}:${candidate.model}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        fallbacks.push(candidate);
+      }
     }
   }
 

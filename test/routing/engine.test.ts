@@ -217,6 +217,39 @@ describe('capability-preserving candidate filter', () => {
   });
 });
 
+describe('cross-provider fallback candidates', () => {
+  it('appends mapped candidates when crossProviderCascade is enabled', () => {
+    const d = planRoute(
+      req({ requestedModel: 'claude-sonnet-4-6' }),
+      ctx({
+        mode: 'standard',
+        crossProviderCascade: {
+          enabled: true,
+          triggerStatuses: [429, 529, 503],
+          providers: ['anthropic', 'openrouter'],
+          modelMapping: {},
+        },
+      }),
+    );
+    expect(d!.primary.provider).toBe('anthropic');
+    expect(d!.fallbacks).toEqual([
+      {
+        provider: 'openrouter',
+        model: 'anthropic/claude-sonnet-4-6',
+        routedModel: 'anthropic/claude-sonnet-4-6',
+      },
+    ]);
+  });
+
+  it('adds nothing when the feature is disabled (default)', () => {
+    const d = planRoute(
+      req({ requestedModel: 'claude-sonnet-4-6' }),
+      ctx({ mode: 'standard' }),
+    );
+    expect(d!.fallbacks).toEqual([]);
+  });
+});
+
 describe('requiredCapabilitiesFor', () => {
   it('maps feature flags to capability names', () => {
     expect(requiredCapabilitiesFor({ tools: true, reasoning: true })).toEqual([

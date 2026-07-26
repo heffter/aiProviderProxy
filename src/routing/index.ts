@@ -54,3 +54,17 @@ export {
   DEFAULT_RETRY_POLICY,
   type RetryPolicy,
 } from './retry.js';
+
+export {
+  CooldownManager,
+  DEFAULT_COOLDOWN_CONFIG,
+  type CooldownConfig,
+} from './cooldown.js';
+
+export {
+  mapModel,
+  fallbackProviders,
+  crossProviderCandidates,
+  BUILT_IN_MODEL_MAPPING,
+  type ModelFamilyMapping,
+} from './cross-provider.js';

@@ -118,6 +118,25 @@ export const routingSchema = z
       .object({
         enabled: z.boolean().default(false),
         triggerStatuses: z.array(z.number().int()).default([429, 529, 503]),
+        /** Ordered provider ids to try; primary first, rest are fallbacks. */
+        providers: z.array(z.string()).default([]),
+        /** Custom [from][to][model] mappings overlaid on the built-ins. */
+        modelMapping: z
+          .record(
+            z.string(),
+            z.record(z.string(), z.record(z.string(), z.string())),
+          )
+          .default({}),
+      })
+      .passthrough()
+      .default({}),
+    /** Per-provider cooldown circuit breaker (epic AIPP-10, 10.4). */
+    cooldown: z
+      .object({
+        enabled: z.boolean().default(true),
+        allowedFails: z.number().int().min(1).default(3),
+        windowSeconds: z.number().int().min(1).default(60),
+        cooldownSeconds: z.number().int().min(1).default(120),
       })
       .passthrough()
       .default({}),

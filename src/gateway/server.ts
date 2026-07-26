@@ -45,6 +45,7 @@ import {
   DEFAULT_DOWNGRADE_MAPPING,
   backoffDelayMs,
   shouldPreStreamRetry,
+  CooldownManager,
   type RoutingDecision,
   type FallbackTrigger,
   type RetryPolicy,
@@ -144,6 +145,8 @@ export interface GatewayDeps {
   sleep?: (ms: number) => Promise<void>;
   /** RNG for retry jitter (injected for deterministic retry tests). */
   random?: () => number;
+  /** Provider cooldown breaker; defaults to one built from `config.routing.cooldown`. */
+  cooldown?: CooldownManager;
   clock?: Clock;
   genId?: IdGen;
   now?: () => number;
@@ -402,6 +405,7 @@ export class Gateway {
   private readonly transport: Transport;
   private readonly toolAuthorizer: ToolAuthorizer;
   private readonly modelRegistry: ModelRegistry;
+  private readonly cooldown: CooldownManager;
   private readonly estimateLimiter: EstimateRateLimiter;
   private server?: Server;
 
@@ -411,6 +415,18 @@ export class Gateway {
     this.toolAuthorizer =
       deps.toolAuthorizer ?? new ToolAuthorizer(deps.config.tools);
     this.modelRegistry = deps.modelRegistry ?? buildModelRegistry();
+    const cd = deps.config.routing.cooldown;
+    this.cooldown =
+      deps.cooldown ??
+      new CooldownManager(
+        {
+          enabled: cd.enabled,
+          allowedFails: cd.allowedFails,
+          windowSeconds: cd.windowSeconds,
+          cooldownSeconds: cd.cooldownSeconds,
+        },
+        { now: deps.now },
+      );
     this.estimateLimiter = new EstimateRateLimiter({ now: deps.now });
   }
 
@@ -648,6 +664,26 @@ export class Gateway {
   }
 
   /**
+   * Feed a failed attempt to the cooldown breaker, but only for the transient
+   * upstream categories that reflect provider health (rate-limit / overload /
+   * timeout / connection), never client or validation faults.
+   */
+  private recordProviderFailure(
+    provider: string,
+    category: ErrorCategory,
+    httpStatus: number | undefined,
+  ): void {
+    const triggerStatuses =
+      this.deps.config.routing.crossProviderCascade.triggerStatuses;
+    if (
+      isReliabilityCategory(category) ||
+      isReliabilityStatus(httpStatus, triggerStatuses)
+    ) {
+      this.cooldown.recordFailure(provider);
+    }
+  }
+
+  /**
    * A single planned upstream attempt within a logical request: a resolved
    * provider/model plus the linkage explaining why this attempt exists.
    */
@@ -820,6 +856,39 @@ export class Gateway {
       const hop = queue.shift() as RoutingHop;
       const routingCtx = this.hopRouting(route, hop);
 
+      // Cooldown: skip a cooling provider without an upstream call. Advance to
+      // the next candidate (stamping reliability linkage); if none remain, the
+      // request fails with an overloaded error.
+      if (!this.cooldown.isAvailable(hop.provider)) {
+        if (queue.length > 0) {
+          queue[0] = {
+            ...queue[0],
+            fallbackFrom: hop.model,
+            fallbackTrigger: 'reliability',
+          };
+          continue;
+        }
+        const attempt = ctx.startAttempt({
+          provider: hop.provider,
+          upstreamProtocol: 'unknown',
+          routedModel: hop.model,
+          nativeModel: hop.model,
+          routing: routingCtx,
+        });
+        attempt.complete('upstream_error');
+        ctx.complete('upstream_error');
+        this.emit(ctx, attempt, {
+          success: false,
+          outcome: 'provider_overloaded',
+        });
+        return errorResponse(
+          anthropicError(
+            'overloaded_error',
+            `Provider ${hop.provider} is cooling down after repeated failures`,
+          ),
+        );
+      }
+
       let adapter: ProviderAdapter;
       try {
         adapter = this.deps.registry.get(hop.provider);
@@ -895,6 +964,7 @@ export class Gateway {
           ? 'client_cancelled'
           : adapter.classifyError({ cause });
         attempt.complete(categoryToTerminalState(category));
+        this.recordProviderFailure(hop.provider, category, undefined);
         if (
           await this.advanceAfterFailure(
             category,
@@ -927,6 +997,11 @@ export class Gateway {
         });
         attempt.complete(
           categoryToTerminalState(category),
+          transportResponse.status,
+        );
+        this.recordProviderFailure(
+          hop.provider,
+          category,
           transportResponse.status,
         );
         if (
@@ -967,6 +1042,7 @@ export class Gateway {
       // Success: this hop wins the request.
       attempt.complete('success', transportResponse.status);
       ctx.complete('success');
+      this.cooldown.recordSuccess(hop.provider);
       this.emit(ctx, attempt, {
         success: true,
         outcome: 'success',
