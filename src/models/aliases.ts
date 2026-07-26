@@ -62,6 +62,11 @@ export const MODEL_MAPPING: Record<string, ResolvedModel> = {
   'grok-3-mini': { provider: 'xai', model: 'grok-3-mini' },
   deepseek: { provider: 'deepseek', model: 'deepseek-chat' },
   'deepseek-r1': { provider: 'deepseek', model: 'deepseek-reasoner' },
+  // Z.ai GLM (epic AIPP-9).
+  glm: { provider: 'zai', model: 'glm-5.2' },
+  'glm-5.2': { provider: 'zai', model: 'glm-5.2' },
+  'glm-5-turbo': { provider: 'zai', model: 'glm-5-turbo' },
+  'glm-4.7': { provider: 'zai', model: 'glm-4.7' },
 };
 
 /** Routing-mode aliases resolved before smart aliases (ported). */
@@ -149,6 +154,7 @@ const VALID_SLASH_PROVIDERS = new Set([
   'groq',
   'local',
   'ollama',
+  'zai',
 ]);
 
 /** Options for {@link resolveModel}. */
@@ -233,6 +239,9 @@ export function resolveModel(
   }
   if (name.startsWith('grok-')) {
     return { provider: 'xai', model: name };
+  }
+  if (name.startsWith('glm-')) {
+    return { provider: 'zai', model: name };
   }
   if (name.startsWith('openrouter/')) {
     return { provider: 'openrouter', model: name.slice('openrouter/'.length) };

@@ -3,6 +3,7 @@
  */
 
 export * from './aliases.js';
+export * from './builtin.js';
 export * from './capabilities.js';
 export * from './registry.js';
 
