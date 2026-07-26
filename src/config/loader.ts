@@ -21,6 +21,7 @@ import {
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { HOME_DIR_NAME } from '../identity.js';
+import { secureFile } from './security.js';
 import {
   configSchema,
   KNOWN_TOP_LEVEL_KEYS,
@@ -187,4 +188,6 @@ export function saveConfig(config: Config, path: string = configPath()): void {
   const tmp = `${path}.tmp`;
   writeFileSync(tmp, `${JSON.stringify(parsed.data, null, 2)}\n`, 'utf8');
   renameSync(tmp, path);
+  // The config may reference credentials; restrict it to the owner (NFR-SEC-002).
+  secureFile(path);
 }

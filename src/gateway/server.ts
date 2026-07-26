@@ -111,6 +111,7 @@ import {
 import { dataFile, DATA_FILES } from '../ops/trackers/paths.js';
 import { exporterHealth } from '../integrations/tokemetry/index.js';
 import { isLoopbackHost } from '../config/loader.js';
+import { timingSafeEqualStr } from '../config/security.js';
 import {
   EstimateRateLimiter,
   estimateChat,
@@ -233,7 +234,9 @@ function managementAuthorized(
   }
   const auth = header(headers, 'authorization');
   const bearer = auth?.startsWith('Bearer ') ? auth.slice(7) : undefined;
-  return bearer === token || header(headers, 'x-aipp-token') === token;
+  const presented = bearer ?? header(headers, 'x-aipp-token');
+  // Constant-time comparison so a token guess cannot be refined by timing.
+  return presented !== undefined && timingSafeEqualStr(presented, token);
 }
 
 /** Query-string value from a URL, or undefined. */

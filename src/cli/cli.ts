@@ -20,6 +20,7 @@ import {
   saveConfig,
   safeStringify,
   redactError,
+  secureStateFiles,
   migrateFromRelayplane,
   formatMigrationResult,
 } from '../config/index.js';
@@ -132,6 +133,8 @@ async function defaultStartGateway(
     io.err(`warning: ${w}`);
   }
   contentLogStartup(io, config, configHome(), firstRun);
+  // Restrict every local state file to the owner (best-effort; NFR-SEC-002).
+  secureStateFiles(configHome());
   const gateway = createGateway({
     config,
     registry: buildProviderRegistry(),
