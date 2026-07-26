@@ -260,9 +260,7 @@ function normalizeInputItem(
 }
 
 /** Validate and classify the `tools` array into function and hosted tools. */
-function normalizeTools(
-  tools: unknown,
-):
+function normalizeTools(tools: unknown):
   | {
       functionTools: ResponsesFunctionTool[];
       hostedTools: ResponsesHostedTool[];
