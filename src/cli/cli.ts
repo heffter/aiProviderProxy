@@ -35,6 +35,7 @@ import {
   dataFile,
   DATA_FILES,
   AlertManager,
+  ResponseCache,
 } from '../ops/index.js';
 import type { Config } from '../config/index.js';
 import {
@@ -54,6 +55,7 @@ export const COMMANDS = [
   'tokemetry',
   'policy',
   'alerts',
+  'cache',
   'migrate-from-relayplane',
   'version',
   'help',
@@ -178,6 +180,7 @@ function helpText(): string {
     '  tokemetry status|dlq      Show exporter health or dead-lettered events',
     '  policy replay             Simulate a policy over the routing log',
     '  alerts recent|counts      Show recent alerts or counts by type',
+    '  cache stats|clear         Show cache stats or clear the cache',
     '  migrate-from-relayplane   Import an existing ~/.relayplane install',
     '  version                   Print the version',
     '  help                      Show this help',
@@ -398,6 +401,45 @@ function cmdAlerts(args: string[], io: CliIO, file: string): number {
   }
 }
 
+/**
+ * `aipp cache stats|clear` -- inspect or clear the local response cache. No
+ * network egress.
+ */
+function cmdCache(args: string[], io: CliIO, file: string): number {
+  const sub = args[0];
+  if (sub !== 'stats' && sub !== 'clear') {
+    io.err('usage: aipp cache stats|clear');
+    return 2;
+  }
+  try {
+    const { config } = loadConfig(file);
+    const cache = new ResponseCache({
+      enabled: config.cache.enabled,
+      maxSizeMb: config.cache.maxSizeMb,
+      defaultTtlSeconds: config.cache.defaultTtlSeconds,
+      onlyWhenDeterministic: config.cache.onlyWhenDeterministic,
+    });
+    try {
+      if (sub === 'clear') {
+        cache.clear();
+        io.out('cache cleared');
+      } else {
+        const stats = cache.getStats();
+        io.out(
+          `entries: ${stats.entries}  size: ${(stats.sizeBytes / 1_000_000).toFixed(2)} MB  ` +
+            `hits: ${stats.hits}  misses: ${stats.misses}`,
+        );
+      }
+      return 0;
+    } finally {
+      cache.close();
+    }
+  } catch (err) {
+    io.err(`error: ${redactError(err)}`);
+    return 1;
+  }
+}
+
 function cmdMigrate(args: string[], io: CliIO): number {
   try {
     const result = migrateFromRelayplane({ force: args.includes('--force') });
@@ -458,6 +500,8 @@ export async function runCli(
       return cmdPolicy(args, io);
     case 'alerts':
       return cmdAlerts(args, io, file);
+    case 'cache':
+      return cmdCache(args, io, file);
     case 'migrate-from-relayplane':
       return cmdMigrate(args, io);
     default:

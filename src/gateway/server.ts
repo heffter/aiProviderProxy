@@ -100,6 +100,7 @@ import {
 } from '../providers/zai/index.js';
 import { ToolAuthorizer, decideToolEnforcement } from '../tools/index.js';
 import type { BudgetManager } from '../ops/budget/index.js';
+import { computeCacheKey, type ResponseCache } from '../ops/cache/index.js';
 import {
   EstimateRateLimiter,
   estimateChat,
@@ -146,6 +147,12 @@ export interface GatewayDeps {
    * outcome; its daily percent also feeds the downgrade seam by default.
    */
   budget?: BudgetManager;
+  /**
+   * Response cache. On a hit the cached body is returned and a local-only event
+   * is emitted (excluded from Tokemetry export, since no provider tokens were
+   * consumed). Enablement and deterministic gating come from the cache.
+   */
+  cache?: ResponseCache;
   /**
    * Ordered account labels available for a provider, used for token-pool
    * account rotation on an auth failure. Defaults to none (no rotation). The
@@ -598,6 +605,8 @@ export class Gateway {
       providerResponseId?: string;
       stopReason?: string;
       usage?: ProviderUsage;
+      /** Skip the Tokemetry outbox (e.g. a cache hit consumed no tokens). */
+      skipExport?: boolean;
     },
   ): void {
     const event = buildUsageEvent({
@@ -630,7 +639,9 @@ export class Gateway {
       } else {
         this.deps.sinks?.emitLogicalRequestFinal(event);
       }
-      this.deps.outbox?.enqueue(event);
+      if (!input.skipExport) {
+        this.deps.outbox?.enqueue(event);
+      }
     } catch {
       // telemetry is best-effort and must never affect the response
     }
@@ -648,6 +659,7 @@ export class Gateway {
       providerResponseId?: string;
       stopReason?: string;
       usage?: ProviderUsage;
+      skipExport?: boolean;
     },
   ): void {
     this.emitEvent('logical_request', ctx, attempt, input);
@@ -900,6 +912,43 @@ export class Gateway {
       primaryHop,
       ...route.fallbacks.map((f) => ({ provider: f.provider, model: f.model })),
     ];
+
+    // Response cache: on a deterministic request, replay an exact-match hit
+    // without dispatching upstream. A hit consumed no provider tokens, so its
+    // event is emitted locally but excluded from Tokemetry export.
+    const cacheBody = parsed.request.raw as Record<string, unknown>;
+    const cacheKey =
+      this.deps.cache && !this.deps.cache.shouldBypass(cacheBody)
+        ? computeCacheKey(cacheBody)
+        : undefined;
+    if (this.deps.cache && cacheKey) {
+      const cached = this.deps.cache.get(cacheKey);
+      if (cached !== undefined) {
+        const attempt = ctx.startAttempt({
+          provider: primaryHop.provider,
+          upstreamProtocol:
+            primaryHop.provider === 'anthropic' ? 'anthropic' : 'openai_chat',
+          routedModel: primaryHop.model,
+          nativeModel: primaryHop.model,
+          routing: this.hopRouting(route, primaryHop),
+        });
+        attempt.complete('success');
+        ctx.complete('success');
+        this.emit(ctx, attempt, {
+          success: true,
+          outcome: 'cache_hit',
+          skipExport: true,
+        });
+        return {
+          status: 200,
+          headers: {
+            'content-type': 'application/json',
+            'x-aipp-cache': 'hit',
+          },
+          body: JSON.stringify(cached),
+        };
+      }
+    }
 
     // Budget gate: a breaching pre-request check with a `block` action rejects
     // before any dispatch (budget_exceeded outcome). Other breach actions
@@ -1195,6 +1244,10 @@ export class Gateway {
         outHeaders['x-aipp-tools-denied'] = toolsDeniedHeader;
       }
       applyDowngradeHeaders(outHeaders, downgrade);
+      // Populate the response cache for a deterministic request (miss path).
+      if (this.deps.cache && cacheKey) {
+        this.deps.cache.set(cacheKey, hop.model, responseBody);
+      }
       return {
         status: 200,
         headers: outHeaders,

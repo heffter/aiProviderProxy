@@ -185,8 +185,14 @@ export const budgetSchema = z
   })
   .passthrough();
 
+/** Response cache (epic AIPP-11, subtask 11.4): exact-match, deterministic-gated. */
 export const cacheSchema = z
-  .object({ enabled: z.boolean().default(true) })
+  .object({
+    enabled: z.boolean().default(true),
+    maxSizeMb: z.number().positive().default(100),
+    defaultTtlSeconds: z.number().int().positive().default(3600),
+    onlyWhenDeterministic: z.boolean().default(true),
+  })
   .passthrough();
 
 /** Alerting (epic AIPP-11, subtask 11.3): threshold/anomaly/breach + opt-in webhook. */
