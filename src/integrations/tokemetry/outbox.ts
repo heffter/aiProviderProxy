@@ -14,6 +14,7 @@
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
+import { redactString } from '../../config/redact.js';
 import type { CanonicalUsageEvent } from '../../lifecycle/usage-event.js';
 
 /** Row states. */
@@ -136,6 +137,9 @@ export class TokemetryOutbox {
     if (ids.length === 0) {
       return;
     }
+    // The error may echo an upstream response body; redact any credential shape
+    // before it lands in the persistent DLQ record (AIPP-12, 12.1; FR-AUTH-004).
+    const redacted = redactString(error);
     const stmt = this.db.prepare(
       `UPDATE outbox_events
        SET attempts = attempts + 1, next_attempt_at = @next, last_error = @error
@@ -143,7 +147,7 @@ export class TokemetryOutbox {
     );
     const tx = this.db.transaction((rows: number[]) => {
       for (const id of rows) {
-        stmt.run({ id, next: nextAttemptAt, error });
+        stmt.run({ id, next: nextAttemptAt, error: redacted });
       }
     });
     tx(ids);
@@ -154,12 +158,13 @@ export class TokemetryOutbox {
     if (ids.length === 0) {
       return;
     }
+    const redacted = redactString(error);
     const stmt = this.db.prepare(
       `UPDATE outbox_events SET state = 'dead', last_error = @error WHERE id = @id`,
     );
     const tx = this.db.transaction((rows: number[]) => {
       for (const id of rows) {
-        stmt.run({ id, error });
+        stmt.run({ id, error: redacted });
       }
     });
     tx(ids);
