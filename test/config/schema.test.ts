@@ -23,6 +23,7 @@ describe('defaultConfig', () => {
     expect(cfg.protocols).toEqual({
       anthropicMessages: true,
       openaiChat: true,
+      openaiResponses: { enabled: true, allowedHostedTools: [] },
     });
     expect(cfg.contentLog).toEqual({
       enabled: true,

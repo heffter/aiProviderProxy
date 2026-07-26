@@ -43,6 +43,21 @@ import {
   type ParsedMessagesRequest,
 } from '../protocols/anthropic/index.js';
 import type { TokemetryOutbox } from '../integrations/tokemetry/index.js';
+import {
+  buildResponsesObject,
+  chatResponseToCanonical,
+  decideHostedTools,
+  encodeResponsesStream,
+  parseResponsesRequest,
+  responsesError,
+  responsesToChatBody,
+  responsesRequestedToolNames,
+  streamEventsForResult,
+  stripDeniedFunctionTools,
+  type ResponsesEcho,
+  type ResponsesErrorEnvelope,
+  type ResponsesErrorType,
+} from '../protocols/openai-responses/index.js';
 import { ToolAuthorizer, decideToolEnforcement } from '../tools/index.js';
 import { httpTransport } from './transport.js';
 
@@ -159,6 +174,74 @@ export function categoryToAnthropicError(
   }
 }
 
+/** Map a canonical error category to an OpenAI Responses client error. */
+export function categoryToResponsesError(category: ErrorCategory): {
+  type: ResponsesErrorType;
+  status: number;
+} {
+  switch (category) {
+    case 'provider_auth_error':
+    case 'client_auth_error':
+      return { type: 'authentication_error', status: 401 };
+    case 'policy_rejected':
+      return { type: 'permission_error', status: 403 };
+    case 'provider_rate_limited':
+    case 'provider_overloaded':
+      return { type: 'rate_limit_error', status: 429 };
+    case 'provider_validation_error':
+    case 'client_validation_error':
+    case 'capability_unsupported':
+      return { type: 'invalid_request_error', status: 400 };
+    default:
+      return { type: 'server_error', status: 500 };
+  }
+}
+
+/** An OpenAI-shaped error response for the Responses surface. */
+function responsesErrorResponse(
+  status: number,
+  envelope: ResponsesErrorEnvelope,
+): GatewayResponse {
+  return {
+    status,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(envelope),
+  };
+}
+
+/** Request-derived fields echoed back onto a reconstructed Responses object. */
+function buildResponsesEcho(request: {
+  instructions?: string;
+  maxOutputTokens?: number;
+  metadata?: Record<string, unknown>;
+  parallelToolCalls?: boolean;
+  temperature?: number;
+  topP?: number;
+  toolChoice?: unknown;
+  reasoningEffort?: string;
+  reasoningSummary?: unknown;
+  raw: Record<string, unknown>;
+}): ResponsesEcho {
+  const rawTools = (request.raw as { tools?: unknown }).tools;
+  return {
+    instructions: request.instructions ?? null,
+    maxOutputTokens: request.maxOutputTokens ?? null,
+    metadata: request.metadata,
+    parallelToolCalls: request.parallelToolCalls,
+    temperature: request.temperature ?? null,
+    topP: request.topP ?? null,
+    toolChoice: request.toolChoice,
+    tools: Array.isArray(rawTools) ? rawTools : undefined,
+    reasoning:
+      request.reasoningEffort !== undefined
+        ? {
+            effort: request.reasoningEffort,
+            summary: request.reasoningSummary ?? null,
+          }
+        : undefined,
+  };
+}
+
 function categoryToTerminalState(category: ErrorCategory): TerminalState {
   switch (category) {
     case 'provider_timeout':
@@ -202,6 +285,9 @@ export class Gateway {
     }
     if (request.method === 'POST' && path === '/v1/messages/count_tokens') {
       return this.handleCountTokens(request);
+    }
+    if (request.method === 'POST' && path === '/v1/responses') {
+      return this.handleResponses(request);
     }
     return errorResponse(
       anthropicError(
@@ -538,6 +624,252 @@ export class Gateway {
       headers: outHeaders,
       body: transportResponse.body,
     };
+  }
+
+  /**
+   * OpenAI Responses `POST /v1/responses` (epic AIPP-7). Serves Codex and
+   * OpenAI-SDK Responses clients: a provider that speaks the Responses protocol
+   * natively (OpenAI) is forwarded verbatim; a chat-protocol upstream is served
+   * by translating the request to Chat Completions and reconstructing a
+   * Responses object/stream. Function tools go through the shared tool router;
+   * hosted tools pass through only to a direct OpenAI upstream that runs them.
+   */
+  private async handleResponses(
+    request: GatewayRequest,
+  ): Promise<GatewayResponse> {
+    const parsed = parseResponsesRequest(request.body);
+    if (!parsed.ok) {
+      return responsesErrorResponse(parsed.status, parsed.error);
+    }
+
+    const resolved = resolveModel(parsed.request.model, {
+      overrides: this.deps.config.models.overrides,
+    });
+    if (!resolved) {
+      return responsesErrorResponse(
+        400,
+        responsesError(
+          'invalid_request_error',
+          `Unknown model "${parsed.request.model}"`,
+          { param: 'model' },
+        ),
+      );
+    }
+
+    const sessionId = header(request.headers, 'x-claude-code-session-id');
+    const ctx = new RequestContext(
+      {
+        clientProtocol: 'openai_responses',
+        requestedModel: parsed.request.model,
+        sessionId,
+        streaming: parsed.request.stream,
+      },
+      { clock: this.deps.clock, genId: this.deps.genId },
+    );
+
+    let adapter: ProviderAdapter;
+    try {
+      adapter = this.deps.registry.get(resolved.provider);
+    } catch (err) {
+      if (err instanceof ProviderRegistryError) {
+        const attempt = ctx.startAttempt({
+          provider: resolved.provider,
+          upstreamProtocol: 'unknown',
+          routedModel: resolved.model,
+          nativeModel: resolved.model,
+        });
+        attempt.complete('internal_error');
+        ctx.complete('internal_error');
+        this.emit(ctx, attempt, {
+          success: false,
+          outcome: 'capability_unsupported',
+        });
+        return responsesErrorResponse(
+          404,
+          responsesError('not_found_error', err.message),
+        );
+      }
+      throw err;
+    }
+
+    // A provider that speaks the Responses protocol natively is forwarded
+    // verbatim; otherwise translate to Chat Completions.
+    const native = adapter.upstreamProtocols.includes('openai_responses');
+    const attempt = ctx.startAttempt({
+      provider: resolved.provider,
+      upstreamProtocol: native ? 'openai_responses' : 'openai_chat',
+      routedModel: resolved.model,
+      nativeModel: resolved.model,
+    });
+
+    // Tool-router authorization on the requested function tools (FR-TOOLS-008).
+    let toolsDeniedHeader: string | undefined;
+    const requestedTools = responsesRequestedToolNames(parsed.request);
+    if (requestedTools.length > 0) {
+      const decision = decideToolEnforcement(
+        this.toolAuthorizer,
+        request.headers,
+        sessionId ?? '',
+        requestedTools,
+      );
+      if (decision.action === 'reject') {
+        attempt.complete('policy_rejected');
+        ctx.complete('policy_rejected');
+        this.emit(ctx, attempt, { success: false, outcome: 'policy_rejected' });
+        return responsesErrorResponse(
+          403,
+          responsesError(
+            'permission_error',
+            'All requested tools are denied by the active tool pack policy ' +
+              `(denied: ${decision.result.deniedHeader}).`,
+            { param: 'tools', code: 'tools_denied' },
+          ),
+        );
+      }
+      if (decision.action === 'strip') {
+        stripDeniedFunctionTools(
+          parsed.request,
+          new Set(decision.result.allowed),
+        );
+        toolsDeniedHeader = decision.result.deniedHeader;
+      }
+    }
+
+    // Hosted tools: pass through only to a direct OpenAI upstream that runs them
+    // and only when configured as allowed; otherwise a capability error.
+    const hosted = decideHostedTools(parsed.request.hostedTools, {
+      upstreamProvider: resolved.provider,
+      allowedHostedTools:
+        this.deps.config.protocols.openaiResponses.allowedHostedTools,
+    });
+    if (hosted.action === 'reject') {
+      attempt.complete('validation_error');
+      ctx.complete('validation_error');
+      this.emit(ctx, attempt, {
+        success: false,
+        outcome: 'capability_unsupported',
+      });
+      return responsesErrorResponse(hosted.status, hosted.error);
+    }
+
+    const providerRequest: CanonicalProviderRequest = native
+      ? {
+          model: resolved.model,
+          stream: parsed.request.stream,
+          body: { ...parsed.request.raw, model: resolved.model },
+          headers: request.headers,
+          upstreamProtocol: 'openai_responses',
+        }
+      : {
+          model: resolved.model,
+          stream: parsed.request.stream,
+          body: responsesToChatBody(parsed.request, resolved.model, {
+            provider: resolved.provider,
+            reasoningCapable: adapter.capabilities.reasoning,
+            toolsCapable: adapter.capabilities.tools,
+          }) as unknown as Record<string, unknown>,
+          headers: request.headers,
+          upstreamProtocol: 'openai_chat',
+        };
+
+    let transportResponse;
+    try {
+      transportResponse = await this.transport(
+        adapter.serializeRequest(providerRequest),
+        { signal: request.signal },
+      );
+    } catch (cause) {
+      const category: ErrorCategory = request.signal?.aborted
+        ? 'client_cancelled'
+        : adapter.classifyError({ cause });
+      attempt.complete(categoryToTerminalState(category));
+      ctx.complete(categoryToTerminalState(category));
+      this.emit(ctx, attempt, { success: false, outcome: category });
+      const mapped = categoryToResponsesError(category);
+      return responsesErrorResponse(
+        mapped.status,
+        responsesError(mapped.type, 'Upstream request failed'),
+      );
+    }
+
+    const parsedResponse = adapter.parseResponse(transportResponse);
+
+    if (transportResponse.status < 200 || transportResponse.status >= 300) {
+      const category = adapter.classifyError({
+        status: transportResponse.status,
+        body: parsedResponse.body,
+      });
+      attempt.complete(
+        categoryToTerminalState(category),
+        transportResponse.status,
+      );
+      ctx.complete(categoryToTerminalState(category));
+      this.emit(ctx, attempt, {
+        success: false,
+        outcome: category,
+        httpStatus: transportResponse.status,
+        providerRequestId: parsedResponse.providerRequestId,
+        usage: parsedResponse.usage,
+      });
+      const mapped = categoryToResponsesError(category);
+      return responsesErrorResponse(
+        mapped.status,
+        responsesError(
+          mapped.type,
+          `Upstream error ${transportResponse.status}`,
+        ),
+      );
+    }
+
+    attempt.complete('success', transportResponse.status);
+    ctx.complete('success');
+    this.emit(ctx, attempt, {
+      success: true,
+      outcome: 'success',
+      httpStatus: transportResponse.status,
+      providerRequestId: parsedResponse.providerRequestId,
+      providerResponseId: parsedResponse.providerResponseId,
+      stopReason: parsedResponse.stopReason,
+      usage: parsedResponse.usage,
+    });
+
+    const outHeaders: Record<string, string> = {
+      'content-type': 'application/json',
+    };
+    if (parsedResponse.providerRequestId) {
+      outHeaders['request-id'] = parsedResponse.providerRequestId;
+    }
+    if (toolsDeniedHeader) {
+      outHeaders['x-aipp-tools-denied'] = toolsDeniedHeader;
+    }
+
+    // Native upstream: forward the Responses body verbatim (object or SSE).
+    if (native) {
+      if (parsed.request.stream) {
+        outHeaders['content-type'] = 'text/event-stream';
+      }
+      return { status: 200, headers: outHeaders, body: transportResponse.body };
+    }
+
+    // Chat upstream: reconstruct a canonical result, then render the object or
+    // synthesize the streaming transcript from it.
+    const result = chatResponseToCanonical(parsedResponse.body, resolved.model);
+    const echo = buildResponsesEcho(parsed.request);
+    if (parsed.request.stream) {
+      outHeaders['content-type'] = 'text/event-stream';
+      const sse = encodeResponsesStream(streamEventsForResult(result), {
+        genId: this.deps.genId,
+        now: this.deps.now,
+        echo,
+      });
+      return { status: 200, headers: outHeaders, body: sse };
+    }
+    const obj = buildResponsesObject(result, {
+      genId: this.deps.genId,
+      now: this.deps.now,
+      echo,
+    });
+    return { status: 200, headers: outHeaders, body: JSON.stringify(obj) };
   }
 
   /** Start a node:http server bound to the configured host/port. */

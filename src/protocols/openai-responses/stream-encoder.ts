@@ -44,6 +44,7 @@ import {
   prefixedId,
   renderResponseEnvelope,
   type CanonicalOutput,
+  type CanonicalResponseResult,
   type CanonicalResponseUsage,
   type ResponseSnapshotStatus,
   type ResponseStatus,
@@ -393,6 +394,46 @@ export class ResponsesSseEncoder {
     this.sequence += 1;
     return `event: ${type}\ndata: ${JSON.stringify(payload)}\n\n`;
   }
+}
+
+/**
+ * Expand a completed canonical result into the stream event script that
+ * reproduces it. Used to serve a streaming Responses request from a
+ * non-streaming (or reconstructed) upstream result: the result is turned into
+ * the canonical event sequence and fed through {@link encodeResponsesStream}.
+ */
+export function streamEventsForResult(
+  result: CanonicalResponseResult,
+): ResponsesStreamEvent[] {
+  const events: ResponsesStreamEvent[] = [
+    { type: 'response_created', model: result.model, id: result.id },
+  ];
+  for (const output of result.outputs) {
+    if (output.kind === 'message') {
+      events.push({ type: 'output_item_start', item: { kind: 'message' } });
+      events.push({ type: 'output_text', text: output.text });
+      events.push({ type: 'output_item_stop' });
+    } else {
+      events.push({
+        type: 'output_item_start',
+        item: {
+          kind: 'function_call',
+          callId: output.callId,
+          name: output.name,
+        },
+      });
+      events.push({ type: 'function_arguments', delta: output.arguments });
+      events.push({ type: 'output_item_stop' });
+    }
+  }
+  events.push({
+    type: 'response_done',
+    status: result.status,
+    usage: result.usage,
+    incompleteReason: result.incompleteReason,
+    error: result.error,
+  });
+  return events;
 }
 
 /**

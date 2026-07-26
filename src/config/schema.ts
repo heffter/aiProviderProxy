@@ -43,10 +43,24 @@ export const serverSchema = z
   })
   .passthrough();
 
+/** OpenAI Responses surface config (epic AIPP-7; FR-RESP-011/012). */
+export const openaiResponsesProtocolSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    /**
+     * Hosted-tool types allowed to pass through to a direct OpenAI upstream that
+     * executes them (web_search, file_search, ...). Empty means every hosted
+     * tool is rejected with a capability error; the gateway never emulates them.
+     */
+    allowedHostedTools: z.array(z.string()).default([]),
+  })
+  .passthrough();
+
 export const protocolsSchema = z
   .object({
     anthropicMessages: z.boolean().default(true),
     openaiChat: z.boolean().default(true),
+    openaiResponses: openaiResponsesProtocolSchema.default({}),
   })
   .passthrough();
 
