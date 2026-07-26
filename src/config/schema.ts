@@ -69,6 +69,12 @@ export const providerSchema = z
     enabled: z.boolean().default(true),
     baseUrl: z.string().url().optional(),
     credential: credentialRefSchema.optional(),
+    /**
+     * Opt in to a private/loopback or http base URL for this provider (epic
+     * AIPP-12, subtask 12.2). Off by default: SSRF validation rejects private
+     * destinations unless this is set.
+     */
+    allowPrivateNetwork: z.boolean().default(false),
   })
   .passthrough();
 

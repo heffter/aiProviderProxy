@@ -22,6 +22,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { HOME_DIR_NAME } from '../identity.js';
 import { secureFile } from './security.js';
+import { validateBaseUrl } from './ssrf.js';
 import {
   configSchema,
   KNOWN_TOP_LEVEL_KEYS,
@@ -156,7 +157,35 @@ export function loadConfig(path: string = configPath()): LoadResult {
     );
   }
 
+  // SSRF: every configured provider base URL must be a safe destination
+  // (AIPP-12, 12.2; NFR-SEC-003/004).
+  validateProviderBaseUrls(config);
+
   return { config, warnings, path };
+}
+
+/**
+ * Validate each provider's custom base URL against the SSRF policy. Throws
+ * {@link ConfigError} (with the provider id) on the first violation.
+ */
+function validateProviderBaseUrls(config: Config): void {
+  const providers = config.providers as Record<
+    string,
+    { baseUrl?: string; allowPrivateNetwork?: boolean } | undefined
+  >;
+  for (const [id, provider] of Object.entries(providers)) {
+    if (!provider?.baseUrl) {
+      continue;
+    }
+    try {
+      validateBaseUrl(provider.baseUrl, {
+        allowPrivateNetwork: provider.allowPrivateNetwork === true,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new ConfigError(`providers.${id}.baseUrl: ${message}`);
+    }
+  }
 }
 
 /**

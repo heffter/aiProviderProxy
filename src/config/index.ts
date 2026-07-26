@@ -8,6 +8,7 @@ export * from './schema.js';
 export * from './loader.js';
 export * from './redact.js';
 export * from './security.js';
+export * from './ssrf.js';
 export * from './migrate-relayplane.js';
 
 /** Identifies this module within the target skeleton. */

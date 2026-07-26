@@ -24,6 +24,17 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { configHome, saveConfig } from './loader.js';
 import { configSchema, ROUTING_MODES, type Config } from './schema.js';
+import { isPrivateHost } from './ssrf.js';
+
+/** True when a base URL would need the SSRF opt-in (http or a private host). */
+function baseUrlNeedsOptIn(raw: string): boolean {
+  try {
+    const url = new URL(raw);
+    return url.protocol === 'http:' || isPrivateHost(url.hostname);
+  } catch {
+    return false;
+  }
+}
 
 /** Legacy data files copied verbatim into the new home. */
 const DATA_FILES = [
@@ -117,23 +128,37 @@ export function mapV4ToV1(v4: Record<string, unknown>): {
     mode = undefined;
   }
 
+  // A migrated base URL that is private/http was working before; carry the SSRF
+  // opt-in forward so the migrated config still loads (AIPP-12, 12.2).
+  const providerEntry = (
+    enabled: boolean,
+    baseUrl?: string,
+  ): Record<string, unknown> => {
+    const entry: Record<string, unknown> = { enabled };
+    if (typeof baseUrl === 'string') {
+      entry.baseUrl = baseUrl;
+      if (baseUrlNeedsOptIn(baseUrl)) {
+        entry.allowPrivateNetwork = true;
+      }
+    }
+    return entry;
+  };
+
   const providersOut: Record<string, unknown> = {};
   const v4providers = asObject(v4.providers);
   for (const name of Object.keys(v4providers)) {
     const p = asObject(v4providers[name]);
-    providersOut[name] = {
-      enabled: asBool(p.enabled) ?? true,
-      ...(typeof p.baseUrl === 'string' ? { baseUrl: p.baseUrl } : {}),
-    };
+    providersOut[name] = providerEntry(
+      asBool(p.enabled) ?? true,
+      typeof p.baseUrl === 'string' ? p.baseUrl : undefined,
+    );
   }
   const ollama = asObject(v4.ollama);
   if (Object.keys(ollama).length > 0) {
-    providersOut.ollama = {
-      enabled: true,
-      ...(typeof ollama.baseUrl === 'string'
-        ? { baseUrl: ollama.baseUrl }
-        : {}),
-    };
+    providersOut.ollama = providerEntry(
+      true,
+      typeof ollama.baseUrl === 'string' ? ollama.baseUrl : undefined,
+    );
   }
 
   // Content logging default-on unless the legacy dashboard explicitly disabled it.
