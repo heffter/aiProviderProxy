@@ -321,14 +321,12 @@ describe('FR-ROUTE-004/005/006/012 end-to-end fallback telemetry', () => {
     expect(ingest).toHaveLength(2);
     expect(new Set(ingest.map((e) => e.event_id)).size).toBe(2);
 
-    // FR-ROUTE-012: telemetry records the fallback linkage under extra.aipp.routing.
+    // FR-ROUTE-012: telemetry records the fallback linkage in the v2 routing block.
     const winnerIngest = mapToIngest(finals[0], { proxyVersion: 't' });
-    expect(
-      (winnerIngest.extra.aipp as { routing: Record<string, unknown> }).routing,
-    ).toMatchObject({
-      attemptIndex: 1,
-      fallbackFrom: 'claude-sonnet-4-5',
-      fallbackTrigger: 'reliability',
+    expect(winnerIngest.routing).toMatchObject({
+      attempt_index: 1,
+      fallback_from: 'claude-sonnet-4-5',
+      fallback_trigger: 'reliability',
     });
   });
 });

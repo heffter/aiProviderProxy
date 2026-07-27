@@ -31,8 +31,12 @@ Prompts and responses are never included. Export is **off by default**.
 
 - Every usage event is committed to a durable local **outbox** (SQLite) before
   any network attempt — commit-before-export, so nothing is lost on a crash.
-- A batching exporter drains the outbox, retries with backoff, and dead-letters
-  poison events. The request path never blocks on export.
+- A batching exporter drains the outbox and POSTs the **v2 ingest envelope**
+  (`{ "schema_version": 2, "events": [...] }`) to `POST <baseUrl>/api/v2/ingest/events`
+  with a `Bearer` token. Each event is a `UsageEventV2` row (event kind, finality,
+  sequence, provider request/response ids, routing, token counts); gateway-specific
+  detail lives under the allowed `extra.gateway` namespace. It retries with
+  backoff and dead-letters poison events. The request path never blocks on export.
 - `aipp tokemetry status` shows exporter health (queue depth, exported count,
   dead-lettered count). `aipp tokemetry dlq` lists dead-lettered events; their
   stored error records are redacted.
@@ -57,15 +61,25 @@ Cache hits consume no provider tokens and are excluded from export entirely.
 
 ## Live validation
 
-A live end-to-end validation (representative traffic across all three surfaces,
-verifying priced, deduplicated events via the Tokemetry query API, including the
-transcript-collector overlap scenario) is tracked as a post-deployment
-verification and recorded here once the Tokemetry server is available. Until
-then, the mock-based tests in `test/integrations/tokemetry/` stand in as
-evidence.
+Verified end to end against a running Tokemetry server. The harness
+(`test/live/tokemetry-live.mjs`, not part of the gate) drives the real
+gateway -> outbox -> batcher pipeline and checks ingest, server-side dedup, and
+the mapper output:
+
+```bash
+npm run build
+TOKEMETRY_URL=http://127.0.0.1:8787 TOKEMETRY_TOKEN=tkm_... \
+  node test/live/tokemetry-live.mjs
+```
+
+The reconciliation to the real contract happened here: the exporter now targets
+the **v2** ingest endpoint (`/api/v2/ingest/events`) with the `UsageEventV2`
+shape and the `extra.gateway` namespace (the earlier v1-shaped payload was a
+placeholder). Idempotency is by `event_id`: re-posting the same event returns
+`duplicate: 1` (one `usage_events` row).
 
 ### Live run log
 
-| Date        | Machine | Surfaces | Dedup verified | Notes                                |
-| ----------- | ------- | -------- | -------------- | ------------------------------------ |
-| _(pending)_ |         |          |                | Awaiting a deployed Tokemetry server |
+| Date       | Server                    | Surfaces                  | Result                     | Dedup                                                |
+| ---------- | ------------------------- | ------------------------- | -------------------------- | ---------------------------------------------------- |
+| 2026-07-27 | local v2 (migration 0027) | Messages, Chat, Responses | flush exported 3/3, dead 0 | re-post same `event_id`: accepted 1 then duplicate 1 |

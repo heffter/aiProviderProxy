@@ -17,7 +17,7 @@ sources**:
 
 Both sources set the ingest `event_id` to the **provider request id** (the
 Anthropic `request-id` header, OpenAI `x-request-id`, Z.ai request id). Because
-the two sources observe the *same* upstream request, they compute the *same*
+the two sources observe the _same_ upstream request, they compute the _same_
 `event_id`. The ingest contract's **`event_id` keep-max upsert** then collapses
 the two reports into one `usage_events` row instead of double-counting.
 
@@ -40,7 +40,7 @@ Proxy-side guarantees that make this work:
 For a given `event_id`, the server keeps the report with the **maximum
 sequence**, and among equal sequences prefers `finality = "final"`. Token counts
 and metadata come from the kept report. `cost_usd` is always computed
-server-side; the proxy never sends it (it sends `extra.aipp.cost_estimate_usd`
+server-side; the proxy never sends it (it sends `extra.gateway.cost_estimate_usd`
 as advisory only).
 
 ## OQ-001 — dimension-column merge policy (OPEN)
@@ -78,7 +78,7 @@ dimensions from both observers.
 ## Status
 
 - **Proxy side: implemented and documented.** The exporter already emits the
-  `event_id`, `provenance`, `source`, and `extra.aipp` fields the policy needs.
+  `event_id`, `provenance`, `source`, and `extra.gateway` fields the policy needs.
 - **Server side: OPEN.** The merge policy above must be confirmed and implemented
   in the Tokemetry repo. Track under OQ-001. Until confirmed, the proxy makes no
   assumption beyond keep-max selecting a single primary row; it never depends on

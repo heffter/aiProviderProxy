@@ -116,7 +116,8 @@ export class TokemetryBatcher {
           'content-type': 'application/json',
           authorization: `Bearer ${this.cfg.token}`,
         },
-        body: JSON.stringify({ events }),
+        // v2 ingest envelope: POST /api/v2/ingest/events (AIPP-13.4).
+        body: JSON.stringify({ schema_version: 2, events }),
       });
       return { status: res.status };
     } catch (cause) {

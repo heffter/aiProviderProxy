@@ -147,7 +147,7 @@ describe('429 reliability cascade', () => {
     });
   });
 
-  it('exposes the routing block under extra.aipp for Tokemetry', async () => {
+  it('exposes the routing block on the Tokemetry v2 event', async () => {
     const { gateway, finals } = harness(
       async (req) =>
         req.url.includes('anthropic.com')
@@ -157,11 +157,9 @@ describe('429 reliability cascade', () => {
     );
     await gateway.handle(messages('claude-sonnet-4-5'));
     const ingest = mapToIngest(finals[0], { proxyVersion: 'test' });
-    const routing = (ingest.extra.aipp as { routing: Record<string, unknown> })
-      .routing;
-    expect(routing).toMatchObject({
-      fallbackTrigger: 'reliability',
-      fallbackFrom: 'claude-sonnet-4-5',
+    expect(ingest.routing).toMatchObject({
+      fallback_trigger: 'reliability',
+      fallback_from: 'claude-sonnet-4-5',
     });
   });
 });

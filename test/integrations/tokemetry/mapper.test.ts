@@ -60,37 +60,48 @@ describe('mapToIngest', () => {
     project: { mode: 'raw' },
   });
 
-  it('maps the documented fields (event_id = provider request id)', () => {
+  it('maps the v2 usage-event fields (event_id = provider request id)', () => {
     expect(ingest).toMatchObject({
+      schema_version: 2,
       event_id: 'req_provider_1',
+      event_kind: 'attempt',
+      finality: 'final',
+      sequence: 0,
       provider: 'anthropic',
-      machine_id: 'workstation',
+      native_model: 'claude-sonnet-4-20250514',
+      requested_model: 'claude-sonnet-4',
+      routed_model: 'claude-sonnet-4',
+      machine: 'workstation',
       session_id: 'sess-1',
-      ts: '2026-01-01T00:00:00.000Z',
-      model: 'claude-sonnet-4-20250514',
-      entrypoint: 'proxy',
+      ts_started: '2026-01-01T00:00:00.000Z',
+      ts_completed: '2026-01-01T00:00:01.000Z',
       input_tokens: 100,
       output_tokens: 25,
       cache_read_tokens: 7,
       cache_write_short_tokens: 1024,
       cache_write_long_tokens: 2048,
+      reasoning_tokens: 5,
+      success: true,
+      outcome: 'success',
+      http_status: 200,
       service_tier: 'standard',
+      streaming: true,
+      latency_ms: 1200,
+      time_to_first_token_ms: 300,
+      tool_call_count: 2,
       provenance: 'local_estimate',
-      source: 'aiproviderproxy',
+      source: { type: 'gateway', name: 'aiproviderproxy', version: '2.0.0' },
+      routing: { attempt_index: 0 },
     });
   });
 
-  it('never sends cost_usd; puts the estimate under extra.aipp', () => {
+  it('never sends cost_usd; puts the estimate under the gateway namespace', () => {
     expect(ingest).not.toHaveProperty('cost_usd');
-    expect(ingest.extra.aipp).toMatchObject({
+    expect(ingest).not.toHaveProperty('observed_cost');
+    expect(ingest.extra.gateway).toMatchObject({
       cost_estimate_usd: 0.0031,
       client_protocol: 'anthropic_messages',
       upstream_protocol: 'anthropic',
-      latency_ms: 1200,
-      ttft_ms: 300,
-      reasoning_tokens: 5,
-      proxy_version: '2.0.0',
-      schema_version: 1,
     });
   });
 
@@ -109,7 +120,9 @@ describe('mapToIngest', () => {
     ];
     for (const key of contentKeys) {
       expect(clean, key).not.toHaveProperty(key);
-      expect(clean.extra.aipp, `extra.aipp.${key}`).not.toHaveProperty(key);
+      expect(clean.extra.gateway, `extra.gateway.${key}`).not.toHaveProperty(
+        key,
+      );
     }
   });
 });
