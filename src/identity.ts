@@ -20,3 +20,10 @@ export const DISPLAY_NAME = 'AI Provider Proxy';
 
 /** Root directory name under the user's home for config and state. */
 export const HOME_DIR_NAME = '.aiproviderproxy';
+
+/**
+ * Product version. Must be kept in sync with `package.json` "version"; it is
+ * declared here because `tsc` (rootDir `./src`) cannot import the manifest.
+ * Reported to Tokemetry as the source version of exported usage events.
+ */
+export const PRODUCT_VERSION = '2.0.0';

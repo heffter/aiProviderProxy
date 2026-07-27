@@ -28,7 +28,7 @@ import {
   exporterHealth,
   formatExporterHealth,
 } from '../integrations/tokemetry/index.js';
-import { buildProviderRegistry, createGateway } from '../gateway/index.js';
+import { createGatewayRuntime } from '../runtime/index.js';
 import {
   contentLogDisclosure,
   pruneHistory,
@@ -123,7 +123,12 @@ export function contentLogStartup(
   }
 }
 
-/** Default gateway boot: load config, build the registry, and listen. */
+/**
+ * Default gateway boot: load config, compose the full runtime (sinks, Tokemetry
+ * export, budget/cache/mesh) via {@link createGatewayRuntime}, and listen. On
+ * SIGINT/SIGTERM it runs an orderly shutdown (stop the export pump, drain sinks,
+ * flush the outbox, close DBs) before resolving.
+ */
 async function defaultStartGateway(
   io: CliIO,
   configFile?: string,
@@ -137,15 +142,21 @@ async function defaultStartGateway(
   contentLogStartup(io, config, configHome(), firstRun);
   // Restrict every local state file to the owner (best-effort; NFR-SEC-002).
   secureStateFiles(configHome());
-  const gateway = createGateway({
-    config,
-    registry: buildProviderRegistry(),
+  const runtime = createGatewayRuntime(config, {
+    warn: (message) => io.err(message),
   });
-  const { host, port } = await gateway.listen();
+  const { host, port } = await runtime.listen();
   io.out(`aiproviderproxy gateway listening on http://${host}:${port}`);
-  // Resolve only when the process is asked to stop.
+  // Resolve only after an orderly shutdown completes.
   return new Promise<number>((resolve) => {
-    const stop = (): void => resolve(0);
+    let shuttingDown = false;
+    const stop = (): void => {
+      if (shuttingDown) {
+        return;
+      }
+      shuttingDown = true;
+      void runtime.stop().finally(() => resolve(0));
+    };
     process.once('SIGINT', stop);
     process.once('SIGTERM', stop);
   });

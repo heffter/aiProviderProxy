@@ -12,6 +12,11 @@
 export { createGateway, Gateway, type GatewayDeps } from './gateway/server.js';
 export { buildProviderRegistry } from './gateway/providers.js';
 export {
+  createGatewayRuntime,
+  type GatewayRuntime,
+  type RuntimeOptions,
+} from './runtime/index.js';
+export {
   loadConfig,
   saveConfig,
   defaultConfig,
