@@ -41,13 +41,15 @@ function harness(config: Config, routingPolicy: RoutingPolicy | null) {
   const events: CanonicalUsageEvent[] = [];
   const dispatched: string[] = [];
   const transport: Transport = async (req) => {
-    dispatched.push(req.body);
+    dispatched.push(req.body ?? '');
     return { status: 200, headers: { 'request-id': 'r' }, body: anthropicOk };
   };
   const sinks = new EventSinkRegistry();
   sinks.register({
     name: 'capture',
-    onLogicalRequestFinal: (e) => events.push(e),
+    onLogicalRequestFinal: (e) => {
+      events.push(e);
+    },
   });
   const deps: GatewayDeps = {
     config,

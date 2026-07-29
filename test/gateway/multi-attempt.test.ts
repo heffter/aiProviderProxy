@@ -25,7 +25,10 @@ import type { Config } from '../../src/config/index.js';
 import { EventSinkRegistry } from '../../src/lifecycle/index.js';
 import { TokemetryOutbox } from '../../src/integrations/tokemetry/index.js';
 import type { CanonicalUsageEvent } from '../../src/lifecycle/usage-event.js';
-import type { Transport } from '../../src/providers/types.js';
+import type {
+  Transport,
+  TransportResponse,
+} from '../../src/providers/types.js';
 import {
   RoutingLogSink,
   type RoutingLogRecord,
@@ -115,7 +118,7 @@ function cascadeConfig(models: string[]): Config {
 describe('429 reliability cascade', () => {
   it('falls back to the next provider and links the hop', async () => {
     const { gateway, attempts, finals } = harness(
-      async (req) => {
+      async (req): Promise<TransportResponse> => {
         if (req.url.includes('anthropic.com')) {
           return { status: 429, headers: {}, body: '{"error":{}}' };
         }
@@ -220,7 +223,7 @@ describe('401 account rotation', () => {
   it('rotates to the next account of the same provider and links it', async () => {
     let calls = 0;
     const { gateway, attempts, finals } = harness(
-      async () => {
+      async (): Promise<TransportResponse> => {
         calls += 1;
         return calls === 1
           ? { status: 401, headers: {}, body: '{"error":{}}' }

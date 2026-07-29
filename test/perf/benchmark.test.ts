@@ -121,7 +121,6 @@ describe('performance baseline', () => {
       samples.push(performance.now() - t0);
     }
     const s = stats(samples);
-    // eslint-disable-next-line no-console
     console.log(
       `[perf] non-streaming overhead p50=${s.p50.toFixed(3)}ms p95=${s.p95.toFixed(3)}ms p99=${s.p99.toFixed(3)}ms`,
     );
@@ -137,7 +136,6 @@ describe('performance baseline', () => {
       samples.push(performance.now() - t0);
     }
     const s = stats(samples);
-    // eslint-disable-next-line no-console
     console.log(
       `[perf] outbox insert p50=${s.p50.toFixed(4)}ms p95=${s.p95.toFixed(4)}ms p99=${s.p99.toFixed(4)}ms`,
     );
@@ -159,7 +157,6 @@ describe('performance baseline', () => {
     }
     const elapsedSec = (performance.now() - t0) / 1000;
     const rate = processed / elapsedSec;
-    // eslint-disable-next-line no-console
     console.log(
       `[perf] exporter throughput ${Math.round(rate)} events/sec (${processed} in ${elapsedSec.toFixed(3)}s)`,
     );

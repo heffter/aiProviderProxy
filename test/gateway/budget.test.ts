@@ -53,7 +53,9 @@ function harness(budget: BudgetManager, withSink = false) {
   const sinks = new EventSinkRegistry();
   sinks.register({
     name: 'capture',
-    onLogicalRequestFinal: (e) => events.push(e),
+    onLogicalRequestFinal: (e) => {
+      events.push(e);
+    },
   });
   if (withSink) {
     sinks.register(new BudgetSink(budget));

@@ -1,7 +1,8 @@
 # Release acceptance checklist — v2.0.0
 
 Epic AIPP-13, subtask 13.5 (PRD Section 17). Every acceptance criterion with the
-evidence that demonstrates it. The full gate (`npm run test:gates`) is green;
+evidence that demonstrates it. The full gate (`npm run gates`, which runs
+`lint`, `typecheck`, and the coverage suite `test:gates`) is green;
 `npm audit --omit=dev` and `trivy fs` report no HIGH/CRITICAL.
 
 | AC     | Criterion                                                     | Status                    | Evidence                                                                                                               |

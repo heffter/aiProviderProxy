@@ -281,8 +281,12 @@ describe('FR-ROUTE-004/005/006/012 end-to-end fallback telemetry', () => {
     const sinks = new EventSinkRegistry();
     sinks.register({
       name: 'capture',
-      onAttemptFinal: (e) => attempts.push(e),
-      onLogicalRequestFinal: (e) => finals.push(e),
+      onAttemptFinal: (e) => {
+        attempts.push(e);
+      },
+      onLogicalRequestFinal: (e) => {
+        finals.push(e);
+      },
     });
     const outbox = new TokemetryOutbox({ database: new Database(':memory:') });
     const deps: GatewayDeps = {

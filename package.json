@@ -29,7 +29,8 @@
     "format": "prettier --write \"src/{gateway,protocols,providers,models,lifecycle,routing,integrations,ops,config,cli,tools,fixtures,runtime}/**/*.ts\" src/identity.ts \"test/**/*.ts\"",
     "format:check": "prettier --check \"src/{gateway,protocols,providers,models,lifecycle,routing,integrations,ops,config,cli,tools,fixtures,runtime}/**/*.ts\" src/identity.ts \"test/**/*.ts\"",
     "typecheck": "tsc -p tsconfig.gates.json",
-    "test:gates": "vitest run --config vitest.gates.config.ts --coverage"
+    "test:gates": "vitest run --config vitest.gates.config.ts --coverage",
+    "gates": "npm run lint && npm run typecheck && npm run test:gates"
   },
   "keywords": [
     "relayplane",

@@ -1,11 +1,14 @@
 {
   "//": "Strict typecheck for NEW (AIPP-2+) code and tests only (epic AIPP-2, subtask 2.2). Legacy sources are checked by the main build.",
+  "//module": "Tests run under vitest (vite/esbuild) as ES modules, so typecheck them as ESM (module ESNext + Bundler resolution) to permit import.meta. The production build uses tsconfig.json (NodeNext).",
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
     "rootDir": ".",
     "types": ["node"],
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler"
   },
   "include": [
     "src/gateway/**/*",

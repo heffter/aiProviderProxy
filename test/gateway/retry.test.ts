@@ -55,8 +55,12 @@ function harness(transport: Transport, config: Config = defaultConfig()) {
   const sinks = new EventSinkRegistry();
   sinks.register({
     name: 'capture',
-    onAttemptFinal: (e) => attempts.push(e),
-    onLogicalRequestFinal: (e) => finals.push(e),
+    onAttemptFinal: (e) => {
+      attempts.push(e);
+    },
+    onLogicalRequestFinal: (e) => {
+      finals.push(e);
+    },
   });
   const deps: GatewayDeps = {
     config,

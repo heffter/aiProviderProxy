@@ -90,7 +90,9 @@ describe('error-response redaction', () => {
     const sinks = new EventSinkRegistry();
     sinks.register({
       name: 'capture',
-      onLogicalRequestFinal: (e) => events.push(e),
+      onLogicalRequestFinal: (e) => {
+        events.push(e);
+      },
     });
     const transport: Transport = async () => ({
       status: 401,
