@@ -113,6 +113,7 @@ import { exporterHealth } from '../integrations/tokemetry/index.js';
 import { isLoopbackHost } from '../config/loader.js';
 import { timingSafeEqualStr } from '../config/security.js';
 import { checkRequestLimits, type LimitPolicy } from './limits.js';
+import type { ContentBuffer } from './content-buffer.js';
 import {
   EstimateRateLimiter,
   estimateChat,
@@ -174,6 +175,13 @@ export interface GatewayDeps {
   dataDir?: string;
   /** Request size / JSON-depth limits (NFR-SEC-008); defaults applied when omitted. */
   limits?: LimitPolicy;
+  /**
+   * Local-only content buffer. When present and `contentLog.enabled`, the
+   * winning attempt's request/response bodies are recorded here for the
+   * HistorySink to drain; content never enters the canonical usage event or
+   * the Tokemetry export (Task 16).
+   */
+  contentBuffer?: ContentBuffer;
   /**
    * Ordered account labels available for a provider, used for token-pool
    * account rotation on an auth failure. Defaults to none (no rotation). The
@@ -820,6 +828,25 @@ export class Gateway {
     this.emitEvent('logical_request', ctx, attempt, input);
   }
 
+  /**
+   * Record the winning attempt's request/response into the local content buffer
+   * so the HistorySink can write them to history.jsonl. Gated on
+   * `contentLog.enabled`; a no-op when content logging is off or no buffer is
+   * wired. Must be called BEFORE {@link emit}, since the sink drains the buffer
+   * (asynchronously) as part of the logical-request event. Content recorded
+   * here never reaches the canonical usage event or the Tokemetry export.
+   */
+  private captureContent(
+    logicalRequestId: string,
+    request: unknown,
+    response: unknown,
+  ): void {
+    if (!this.deps.config.contentLog.enabled) {
+      return;
+    }
+    this.deps.contentBuffer?.record(logicalRequestId, request, response);
+  }
+
   /** Emit an event for a non-winning (superseded) fallback attempt. */
   private emitAttempt(
     ctx: RequestContext,
@@ -1365,6 +1392,11 @@ export class Gateway {
       attempt.complete('success', transportResponse.status);
       ctx.complete('success');
       this.cooldown.recordSuccess(hop.provider);
+      this.captureContent(
+        ctx.logicalRequestId,
+        providerRequest.body,
+        parsedResponse.body,
+      );
       this.emit(ctx, attempt, {
         success: true,
         outcome: 'success',
@@ -1728,6 +1760,11 @@ export class Gateway {
 
     attempt.complete('success', transportResponse.status);
     ctx.complete('success');
+    this.captureContent(
+      ctx.logicalRequestId,
+      providerRequest.body,
+      parsedResponse.body,
+    );
     this.emit(ctx, attempt, {
       success: true,
       outcome: 'success',
@@ -1979,6 +2016,11 @@ export class Gateway {
 
     attempt.complete('success', transportResponse.status);
     ctx.complete('success');
+    this.captureContent(
+      ctx.logicalRequestId,
+      providerRequest.body,
+      parsedResponse.body,
+    );
     this.emit(ctx, attempt, {
       success: true,
       outcome: 'success',

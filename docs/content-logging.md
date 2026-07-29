@@ -12,6 +12,22 @@ model outputs are stored on disk.
 This data is **local only**. It is never sent anywhere: it is not part of the
 canonical usage event, and it is never included in Tokemetry export.
 
+## What is stored
+
+For each successful request the **winning attempt's** request and response
+bodies are captured (all three surfaces: Messages, Responses, Chat
+Completions). Before they are written they are:
+
+- **Redacted** — credential-shaped strings (API keys, bearer tokens) and values
+  under sensitive keys (`authorization`, `apiKey`, `password`, …) are removed,
+  the same redaction the diagnostic paths use.
+- **Bounded** — a body that exceeds the request size (10 MiB) or JSON-depth (64)
+  limits is replaced by a small `{ "omitted": "…" }` marker rather than stored
+  verbatim, so the log stays cheap to write and read.
+
+Failed requests and cache hits record metadata only (there is no winning
+upstream exchange to store).
+
 ## Where and for how long
 
 - **File:** `<home>/history.jsonl` (owner-only permissions, `0600`, where the

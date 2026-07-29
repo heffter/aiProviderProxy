@@ -32,6 +32,7 @@ import {
 } from '../config/index.js';
 import { PRODUCT_NAME, PRODUCT_VERSION } from '../identity.js';
 import { createGateway, type Gateway } from '../gateway/server.js';
+import { ContentBuffer } from '../gateway/content-buffer.js';
 import { buildProviderRegistry } from '../gateway/providers.js';
 import { httpTransport } from '../gateway/transport.js';
 import type { Transport } from '../providers/types.js';
@@ -144,13 +145,18 @@ export function createGatewayRuntime(
 
   // --- Event sink registry: observability trackers (always on) ---------------
   const sinks = new EventSinkRegistry();
+  // Local-only content buffer: the gateway records the winning attempt's
+  // request/response here (when content logging is on) and the HistorySink
+  // drains it. Content lives only in this buffer and history.jsonl -- never in
+  // a canonical usage event, so it cannot reach the Tokemetry export (Task 16).
+  const contentBuffer = new ContentBuffer({
+    maxEntries: config.contentLog.maxEntries,
+  });
   sinks.register(
     new HistorySink({
       dir: home,
       contentLogEnabled: config.contentLog.enabled,
-      // No content buffer exists to feed getContent yet; history is written
-      // metadata-only, which is what the dashboard reads. Prompt/response
-      // capture is a separate, deferred concern (see Task 16).
+      getContent: (event) => contentBuffer.take(event.logicalRequestId),
     }),
   );
   sinks.register(new AgentsSink({ dir: home }));
@@ -263,6 +269,7 @@ export function createGatewayRuntime(
     cache,
     mesh,
     dataDir: home,
+    contentBuffer,
   });
 
   let stopped = false;
