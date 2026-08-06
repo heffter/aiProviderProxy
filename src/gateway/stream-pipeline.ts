@@ -32,6 +32,7 @@ import {
   AnthropicSseEncoder,
   ChatToAnthropicTranslator,
   decodeAnthropicStreamEvent,
+  type AnthropicUpstreamEvent,
   type StreamEncoderDeps,
 } from '../protocols/anthropic/index.js';
 import {
@@ -39,6 +40,7 @@ import {
   AnthropicToChatTranslator,
   decodeChatStreamEvent,
   type ChatStreamEncoderDeps,
+  type ChatUpstreamEvent,
 } from '../protocols/openai-chat/index.js';
 import {
   ResponsesSseEncoder,
@@ -62,12 +64,22 @@ export interface TranslatedStreamOptions {
   model: string;
   /**
    * Called exactly once when the stream ends -- normally, truncated, or
-   * abandoned because the client disconnected -- with whatever usage the
-   * upstream reported. This is where a streaming request's telemetry comes
-   * from: the token counts do not exist until the stream's trailing frames
-   * arrive (subtask 17.6).
+   * abandoned because the client disconnected. This is where a streaming
+   * request's telemetry and history content come from: neither the token counts
+   * nor the response body exist until the stream's frames arrive
+   * (subtasks 17.6 and 21).
    */
-  onComplete?: (usage: StreamUsage) => void;
+  onComplete?: (result: StreamCompletion) => void;
+}
+
+/** What a finished stream reports back to the gateway. */
+export interface StreamCompletion {
+  usage: StreamUsage;
+  /**
+   * The assistant response rebuilt from the deltas, for the local history log,
+   * or undefined when the stream carried nothing worth recording.
+   */
+  response?: unknown;
 }
 
 /**
@@ -105,8 +117,10 @@ export async function* anthropicToChatStream(
 ): AsyncIterable<string> {
   const translator = new AnthropicToChatTranslator(options.model);
   const encoder = new ChatChunkEncoder(deps);
+  const captured = new ResponseAccumulator();
   try {
     for await (const event of anthropicEvents(chunks, options.adapter)) {
+      accumulateAnthropic(captured, event);
       for (const chatEvent of translator.push(event)) {
         yield encoder.encode(chatEvent);
       }
@@ -123,9 +137,12 @@ export async function* anthropicToChatStream(
     // usage event carrying the tokens the upstream had already reported.
     const usage = translator.chatUsage;
     options.onComplete?.({
-      inputTokens: usage?.promptTokens,
-      outputTokens: usage?.completionTokens,
-      cachedTokens: usage?.cachedTokens,
+      usage: {
+        inputTokens: usage?.promptTokens,
+        outputTokens: usage?.completionTokens,
+        cachedTokens: usage?.cachedTokens,
+      },
+      response: captured.result(),
     });
   }
 }
@@ -163,8 +180,10 @@ export async function* chatToAnthropicStream(
 ): AsyncIterable<string> {
   const translator = new ChatToAnthropicTranslator(options.model);
   const encoder = new AnthropicSseEncoder(deps);
+  const captured = new ResponseAccumulator();
   try {
     for await (const event of chatEvents(chunks, options.adapter)) {
+      accumulateChat(captured, event);
       for (const anthropicEvent of translator.push(event)) {
         yield encoder.encode(anthropicEvent);
       }
@@ -178,9 +197,12 @@ export async function* chatToAnthropicStream(
   } finally {
     const usage = translator.anthropicUsage;
     options.onComplete?.({
-      inputTokens: usage?.inputTokens,
-      outputTokens: usage?.outputTokens,
-      cachedTokens: usage?.cacheReadTokens,
+      usage: {
+        inputTokens: usage?.inputTokens,
+        outputTokens: usage?.outputTokens,
+        cachedTokens: usage?.cacheReadTokens,
+      },
+      response: captured.result(),
     });
   }
 }
@@ -200,8 +222,10 @@ export async function* chatToResponsesStream(
 ): AsyncIterable<string> {
   const translator = new ChatToResponsesTranslator(options.model);
   const encoder = new ResponsesSseEncoder(deps);
+  const captured = new ResponseAccumulator();
   try {
     for await (const event of chatEvents(chunks, options.adapter)) {
+      accumulateChat(captured, event);
       for (const responsesEvent of translator.push(event)) {
         yield encoder.encode(responsesEvent);
       }
@@ -215,17 +239,139 @@ export async function* chatToResponsesStream(
   } finally {
     const usage = translator.responsesUsage;
     options.onComplete?.({
-      inputTokens: usage?.inputTokens,
-      outputTokens: usage?.outputTokens,
-      cachedTokens: usage?.cachedInputTokens,
+      usage: {
+        inputTokens: usage?.inputTokens,
+        outputTokens: usage?.outputTokens,
+        cachedTokens: usage?.cachedInputTokens,
+      },
+      response: captured.result(),
     });
   }
 }
 
-/** Accumulates the usage an upstream reports across a stream's frames. */
-interface UsageAccumulator {
+/**
+ * Accumulates what a verbatim stream reports as its frames pass by: the usage
+ * the upstream states, and the assistant response rebuilt for the history log.
+ */
+interface StreamObserver {
   observe(event: StreamEvent): void;
   usage(): StreamUsage;
+  response(): unknown;
+}
+
+/**
+ * Cap on the assistant text reconstructed for the history log (subtask 21).
+ *
+ * The point of streaming is not to hold the whole response in memory, so the
+ * reconstruction is bounded and marks itself truncated rather than growing with
+ * the response. The content buffer applies its own size/depth limits on top.
+ */
+const MAX_CAPTURED_TEXT = 128 * 1024;
+
+/**
+ * Rebuilds the assistant response of a stream for the local history log.
+ *
+ * Streaming buffers nothing, so `parsedResponse.body` is empty for a streamed
+ * request and the history log would otherwise record an empty response. This
+ * collects the text (and tool-call shape) as the deltas pass by, which is both
+ * far smaller than the raw SSE transcript and more useful to read back.
+ */
+class ResponseAccumulator {
+  private text = '';
+  private truncated = false;
+  private readonly toolCalls: Array<{ name: string; arguments: string }> = [];
+
+  /** Append an assistant text delta, stopping at the cap. */
+  addText(delta: string): void {
+    if (this.text.length >= MAX_CAPTURED_TEXT) {
+      this.truncated = true;
+      return;
+    }
+    const room = MAX_CAPTURED_TEXT - this.text.length;
+    if (delta.length > room) {
+      this.text += delta.slice(0, room);
+      this.truncated = true;
+      return;
+    }
+    this.text += delta;
+  }
+
+  /** Open a tool call; its arguments arrive as later fragments. */
+  startToolCall(name: string): void {
+    this.toolCalls.push({ name, arguments: '' });
+  }
+
+  /** Append an argument fragment to the most recently opened tool call. */
+  addToolArgs(delta: string): void {
+    const current = this.toolCalls[this.toolCalls.length - 1];
+    if (!current || current.arguments.length >= MAX_CAPTURED_TEXT) {
+      return;
+    }
+    current.arguments += delta.slice(
+      0,
+      MAX_CAPTURED_TEXT - current.arguments.length,
+    );
+  }
+
+  /**
+   * The reconstructed response, or undefined when the stream carried nothing
+   * worth recording (so the sink writes a metadata-only history entry, exactly
+   * as it does for a failed request).
+   */
+  result(): unknown {
+    if (this.text.length === 0 && this.toolCalls.length === 0) {
+      return undefined;
+    }
+    return {
+      streamed: true,
+      ...(this.text.length > 0 ? { text: this.text } : {}),
+      ...(this.toolCalls.length > 0 ? { tool_calls: this.toolCalls } : {}),
+      ...(this.truncated ? { truncated: true } : {}),
+    };
+  }
+}
+
+/** Feed a decoded Anthropic upstream event into the response accumulator. */
+function accumulateAnthropic(
+  into: ResponseAccumulator,
+  event: AnthropicUpstreamEvent,
+): void {
+  switch (event.type) {
+    case 'text_delta':
+      into.addText(event.text);
+      break;
+    case 'block_start':
+      if (event.block.kind === 'tool_use') {
+        into.startToolCall(event.block.name);
+      }
+      break;
+    case 'json_delta':
+      into.addToolArgs(event.partial);
+      break;
+    default:
+      // Thinking and signature deltas are deliberately not recorded.
+      break;
+  }
+}
+
+/** Feed a decoded chat upstream event into the response accumulator. */
+function accumulateChat(
+  into: ResponseAccumulator,
+  event: ChatUpstreamEvent,
+): void {
+  switch (event.type) {
+    case 'text_delta':
+      into.addText(event.text);
+      break;
+    case 'tool_call_start':
+      into.startToolCall(event.name);
+      break;
+    case 'tool_args_delta':
+      into.addToolArgs(event.delta);
+      break;
+    default:
+      break;
+  }
 }
 
 /** Read a nested property off an unknown value without throwing. */
@@ -249,13 +395,18 @@ function numberOrUndefined(value: unknown): number | undefined {
  * Usage from an Anthropic stream: input and cache counts arrive on
  * `message_start`, the final output count on `message_delta`.
  */
-function anthropicUsageAccumulator(): UsageAccumulator {
+function anthropicUsageAccumulator(): StreamObserver {
   const total: StreamUsage = {};
+  const captured = new ResponseAccumulator();
   return {
     observe(event) {
       const decoded = decodeAnthropicStreamEvent(event);
+      if (!decoded) {
+        return;
+      }
+      accumulateAnthropic(captured, decoded);
       const usage =
-        decoded?.type === 'message_start' || decoded?.type === 'message_delta'
+        decoded.type === 'message_start' || decoded.type === 'message_delta'
           ? decoded.usage
           : undefined;
       if (!usage) {
@@ -266,15 +417,18 @@ function anthropicUsageAccumulator(): UsageAccumulator {
       total.cachedTokens = usage.cacheReadTokens ?? total.cachedTokens;
     },
     usage: () => total,
+    response: () => captured.result(),
   };
 }
 
 /** Usage from a chat stream: one trailing, choice-less usage chunk. */
-function chatUsageAccumulator(): UsageAccumulator {
+function chatUsageAccumulator(): StreamObserver {
   const total: StreamUsage = {};
+  const captured = new ResponseAccumulator();
   return {
     observe(event) {
       for (const decoded of decodeChatStreamEvent(event)) {
+        accumulateChat(captured, decoded);
         if (decoded.type === 'usage') {
           total.inputTokens = decoded.usage.promptTokens;
           total.outputTokens = decoded.usage.completionTokens;
@@ -283,6 +437,7 @@ function chatUsageAccumulator(): UsageAccumulator {
       }
     },
     usage: () => total,
+    response: () => captured.result(),
   };
 }
 
@@ -290,10 +445,19 @@ function chatUsageAccumulator(): UsageAccumulator {
  * Usage from a Responses stream: carried on the response snapshot of the
  * terminal event, so the last one seen wins.
  */
-function responsesUsageAccumulator(): UsageAccumulator {
+function responsesUsageAccumulator(): StreamObserver {
   const total: StreamUsage = {};
+  const captured = new ResponseAccumulator();
   return {
     observe(event) {
+      // There is no Responses upstream decoder (the surface only ever forwards
+      // this protocol verbatim), so the text is read straight off the frame.
+      if (event.event === 'response.output_text.delta') {
+        const delta = at(event.data, 'delta');
+        if (typeof delta === 'string') {
+          captured.addText(delta);
+        }
+      }
       const usage = at(event.data, 'response', 'usage');
       if (usage === undefined) {
         return;
@@ -307,11 +471,12 @@ function responsesUsageAccumulator(): UsageAccumulator {
         total.cachedTokens;
     },
     usage: () => total,
+    response: () => captured.result(),
   };
 }
 
 /** Pick the accumulator that understands a given upstream wire format. */
-function accumulatorFor(protocol: UpstreamProtocol): UsageAccumulator {
+function accumulatorFor(protocol: UpstreamProtocol): StreamObserver {
   switch (protocol) {
     case 'anthropic':
       return anthropicUsageAccumulator();
@@ -340,7 +505,7 @@ export async function* observeVerbatimStream(
   options: {
     adapter: ProviderAdapter;
     protocol: UpstreamProtocol;
-    onComplete?: (usage: StreamUsage) => void;
+    onComplete?: (result: StreamCompletion) => void;
   },
 ): AsyncIterable<string> {
   const accumulator = accumulatorFor(options.protocol);
@@ -360,6 +525,9 @@ export async function* observeVerbatimStream(
     read(splitter.flush());
   } finally {
     // In `finally` so a client disconnect still reports the tokens seen so far.
-    options.onComplete?.(accumulator.usage());
+    options.onComplete?.({
+      usage: accumulator.usage(),
+      response: accumulator.response(),
+    });
   }
 }

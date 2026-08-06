@@ -27,6 +27,11 @@ Work that landed after the `v2.0.0` tag (`1ba4a9e`).
 - `POST /v1/responses` with `stream: true` on a chat upstream requested a
   streaming upstream and then parsed the resulting SSE text as a completed
   `chat.completion`.
+- Streamed responses recorded an empty response body in `history.jsonl`.
+  Content logging is on by default and most traffic streams, so the response
+  side of the history log was effectively empty. The assistant text and tool
+  calls are now rebuilt from the deltas and recorded when the stream ends,
+  capped at 128 KiB.
 
 ### Added
 

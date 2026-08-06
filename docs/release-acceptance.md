@@ -27,9 +27,8 @@ evidence that demonstrates it. The full gate (`npm run gates`, which runs
 - **AC-006 live two-source overlap** — task #18. The offline half is now in the
   gate; the live run needs a `TOKEMETRY_TOKEN` and a running transcript
   collector. See `docs/integrations/tokemetry.md`.
-- **Content logging for streamed responses** — task #21. Streaming buffers
-  nothing, so a streamed request records an empty response body in
-  `history.jsonl`. Content logging is off by default.
+- ~~**Content logging for streamed responses**~~ — task #21, resolved. The
+  response is now rebuilt from the deltas and recorded when the stream ends.
 
 ## Since the v2.0.0 tag
 

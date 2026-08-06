@@ -87,6 +87,14 @@ callback, not when the response is dispatched. The callback runs in a `finally`,
 so a client that disconnects mid-stream still produces exactly one usage event
 carrying whatever the upstream had reported by then.
 
+The same callback carries the **response content** for the local history log.
+Streaming buffers nothing, so there is no response body to record at dispatch
+time; instead the assistant text and tool calls are rebuilt from the deltas as
+they pass by, capped at 128 KiB and marked `truncated` beyond that. Content is
+recorded just before the usage event, because the history sink drains the
+content buffer as part of that event. Thinking and reasoning deltas are
+deliberately not recorded.
+
 Where the counts come from, per upstream protocol:
 
 - **Anthropic** — input and cache counts on `message_start`, final output count

@@ -127,7 +127,7 @@ import {
   chatToAnthropicStream,
   chatToResponsesStream,
   observeVerbatimStream,
-  type StreamUsage,
+  type StreamCompletion,
 } from './stream-pipeline.js';
 
 /** A gateway request (transport-agnostic). */
@@ -875,13 +875,19 @@ export class Gateway {
    */
   private emitOnStreamEnd(
     emit: (usage: ProviderUsage | undefined) => void,
-  ): (usage: StreamUsage) => void {
+    capture?: (response: unknown) => void,
+  ): (result: StreamCompletion) => void {
     let emitted = false;
-    return (usage) => {
+    return ({ usage, response }) => {
       if (emitted) {
         return; // a pipeline completes once; guard against a double drain
       }
       emitted = true;
+      // Content first: the sink drains the buffer as part of the usage event,
+      // so recording afterwards would always miss (see captureContent).
+      if (response !== undefined) {
+        capture?.(response);
+      }
       const reported =
         usage.inputTokens !== undefined || usage.outputTokens !== undefined;
       emit(
@@ -1469,11 +1475,18 @@ export class Gateway {
       attempt.complete('success', transportResponse.status);
       ctx.complete('success');
       this.cooldown.recordSuccess(hop.provider);
-      this.captureContent(
-        ctx.logicalRequestId,
-        providerRequest.body,
-        parsedResponse.body,
-      );
+      // A streamed response has no body here; its content is reconstructed from
+      // the deltas and recorded when the stream ends (Task 21).
+      const captureResponse = (response: unknown): void => {
+        this.captureContent(
+          ctx.logicalRequestId,
+          providerRequest.body,
+          response,
+        );
+      };
+      if (!transportResponse.stream) {
+        captureResponse(parsedResponse.body);
+      }
       const emitSuccess = (usage: ProviderUsage | undefined): void => {
         this.emit(ctx, attempt, {
           success: true,
@@ -1501,7 +1514,7 @@ export class Gateway {
           outHeaders['x-aipp-tools-denied'] = toolsDeniedHeader;
         }
         applyDowngradeHeaders(outHeaders, downgrade);
-        const onComplete = this.emitOnStreamEnd(emitSuccess);
+        const onComplete = this.emitOnStreamEnd(emitSuccess, captureResponse);
         return {
           status: 200,
           headers: outHeaders,
@@ -1891,11 +1904,14 @@ export class Gateway {
 
     attempt.complete('success', transportResponse.status);
     ctx.complete('success');
-    this.captureContent(
-      ctx.logicalRequestId,
-      providerRequest.body,
-      parsedResponse.body,
-    );
+    // A streamed response has no body here; its content is reconstructed from
+    // the deltas and recorded when the stream ends (Task 21).
+    const captureResponse = (response: unknown): void => {
+      this.captureContent(ctx.logicalRequestId, providerRequest.body, response);
+    };
+    if (!transportResponse.stream) {
+      captureResponse(parsedResponse.body);
+    }
     const emitSuccess = (usage: ProviderUsage | undefined): void => {
       this.emit(ctx, attempt, {
         success: true,
@@ -1930,7 +1946,7 @@ export class Gateway {
           stream: observeVerbatimStream(transportResponse.stream, {
             adapter,
             protocol: 'openai_responses',
-            onComplete: this.emitOnStreamEnd(emitSuccess),
+            onComplete: this.emitOnStreamEnd(emitSuccess, captureResponse),
           }),
         };
       }
@@ -1957,7 +1973,7 @@ export class Gateway {
           {
             adapter,
             model: resolved.model,
-            onComplete: this.emitOnStreamEnd(emitSuccess),
+            onComplete: this.emitOnStreamEnd(emitSuccess, captureResponse),
           },
           { genId: this.deps.genId, now: this.deps.now, echo },
         ),
@@ -2199,11 +2215,14 @@ export class Gateway {
 
     attempt.complete('success', transportResponse.status);
     ctx.complete('success');
-    this.captureContent(
-      ctx.logicalRequestId,
-      providerRequest.body,
-      parsedResponse.body,
-    );
+    // A streamed response has no body here; its content is reconstructed from
+    // the deltas and recorded when the stream ends (Task 21).
+    const captureResponse = (response: unknown): void => {
+      this.captureContent(ctx.logicalRequestId, providerRequest.body, response);
+    };
+    if (!transportResponse.stream) {
+      captureResponse(parsedResponse.body);
+    }
     const emitSuccess = (usage: ProviderUsage | undefined): void => {
       this.emit(ctx, attempt, {
         success: true,
@@ -2241,7 +2260,7 @@ export class Gateway {
           stream: observeVerbatimStream(transportResponse.stream, {
             adapter,
             protocol: 'openai_chat',
-            onComplete: this.emitOnStreamEnd(emitSuccess),
+            onComplete: this.emitOnStreamEnd(emitSuccess, captureResponse),
           }),
         };
       }
@@ -2266,7 +2285,7 @@ export class Gateway {
           {
             adapter,
             model: resolved.model,
-            onComplete: this.emitOnStreamEnd(emitSuccess),
+            onComplete: this.emitOnStreamEnd(emitSuccess, captureResponse),
           },
           { genId: this.deps.genId, now: this.deps.now },
         ),
