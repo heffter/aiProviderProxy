@@ -83,3 +83,44 @@ placeholder). Idempotency is by `event_id`: re-posting the same event returns
 | Date       | Server                    | Surfaces                  | Result                     | Dedup                                                |
 | ---------- | ------------------------- | ------------------------- | -------------------------- | ---------------------------------------------------- |
 | 2026-07-27 | local v2 (migration 0027) | Messages, Chat, Responses | flush exported 3/3, dead 0 | re-post same `event_id`: accepted 1 then duplicate 1 |
+
+## Cross-source overlap check (AC-006)
+
+The run above proves the dedup **mechanism**: one source posting the same event
+twice yields `duplicate: 1`. It does not exercise the case the mechanism exists
+for — the proxy **and** the Claude Code transcript collector independently
+reporting the same upstream request (see
+`docs/architecture/tokemetry-dedup.md`, D-002).
+
+`test/live/tokemetry-overlap.mjs` covers that, in two modes:
+
+```bash
+npm run build
+
+# Synthetic: the proxy report is real (driven through the actual
+# gateway -> outbox -> batcher pipeline); the collector report is a stand-in
+# posted with the same event_id. Needs only a server + token.
+TOKEMETRY_URL=http://127.0.0.1:8787 TOKEMETRY_TOKEN=tkm_... \
+  node test/live/tokemetry-overlap.mjs
+
+# Real collector (the AC-006 run): nothing is synthesized. Run a Claude Code
+# session through the gateway with the transcript collector up, then:
+TOKEMETRY_URL=http://127.0.0.1:8787 TOKEMETRY_TOKEN=tkm_... \
+  TOKEMETRY_MACHINE=<the machine id the session reported under> \
+  node test/live/tokemetry-overlap.mjs --real-collector
+```
+
+Both modes assert the same invariant: **exactly one `usage_events` row per
+shared `event_id`**. The harness prints a ready-to-paste run-log row.
+
+The parts that do not need a server are covered in the gate by
+`test/integrations/tokemetry/cross-source-overlap.test.ts`: that a provider
+request id survives end to end into `event_id` (so the two sources agree on the
+key at all), that two differently-shaped reports sharing an id collapse to one
+row, and that a fallback hash id cannot collide with a collector report.
+
+### Overlap run log
+
+| Date | Mode | Result  | Notes                                                                                  |
+| ---- | ---- | ------- | -------------------------------------------------------------------------------------- |
+| —    | —    | not run | Blocked on a server credential (`TOKEMETRY_TOKEN`) and a running transcript collector. |
