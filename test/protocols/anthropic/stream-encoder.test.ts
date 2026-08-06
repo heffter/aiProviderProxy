@@ -10,6 +10,7 @@ import { describe, it, expect } from 'vitest';
 import {
   AnthropicSseEncoder,
   encodeAnthropicStream,
+  streamEventsForAnthropicMessage,
   StreamEncoderError,
   type CanonicalStreamEvent,
 } from '../../../src/protocols/anthropic/stream-encoder.js';
@@ -287,5 +288,153 @@ describe('AnthropicSseEncoder invariants', () => {
     expect(() =>
       encodeAnthropicStream([{ type: 'message_start', model: 'm' }]),
     ).toThrow(/did not terminate/);
+  });
+});
+
+describe('streamEventsForAnthropicMessage', () => {
+  it('expands a text message into a well-ordered script', () => {
+    const events = streamEventsForAnthropicMessage(
+      {
+        id: 'msg_9',
+        content: [{ type: 'text', text: 'hello' }],
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 10, output_tokens: 4 },
+      },
+      'claude-sonnet-4',
+    );
+    expect(events.map((e) => e.type)).toEqual([
+      'message_start',
+      'block_start',
+      'text',
+      'block_stop',
+      'message_delta',
+      'message_stop',
+    ]);
+    // The script is accepted by the encoder, which enforces every invariant.
+    const records = parse(encodeAnthropicStream(events));
+    expect(records[0].data).toMatchObject({
+      message: { id: 'msg_9', model: 'claude-sonnet-4' },
+    });
+    // Input tokens land on message_start with output_tokens still zero...
+    expect(
+      (records[0].data as { message: { usage: Record<string, number> } })
+        .message.usage,
+    ).toMatchObject({ input_tokens: 10, output_tokens: 0 });
+    // ...and the final output count arrives on message_delta.
+    expect(records[4].data).toMatchObject({
+      delta: { stop_reason: 'end_turn' },
+      usage: { output_tokens: 4 },
+    });
+  });
+
+  it('expands tool_use blocks into a single partial-JSON delta', () => {
+    const events = streamEventsForAnthropicMessage(
+      {
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_1',
+            name: 'bash',
+            input: { cmd: 'ls' },
+          },
+        ],
+        stop_reason: 'tool_use',
+      },
+      'm',
+    );
+    const records = parse(encodeAnthropicStream(events));
+    expect(records[1].data).toMatchObject({
+      content_block: { type: 'tool_use', id: 'toolu_1', name: 'bash' },
+    });
+    expect(records[2].data).toMatchObject({
+      delta: { type: 'input_json_delta', partial_json: '{"cmd":"ls"}' },
+    });
+  });
+
+  it('expands thinking blocks with their signature', () => {
+    const events = streamEventsForAnthropicMessage(
+      {
+        content: [
+          { type: 'thinking', thinking: 'hmm', signature: 'sig_1' },
+          { type: 'text', text: 'answer' },
+        ],
+      },
+      'm',
+    );
+    const records = parse(encodeAnthropicStream(events));
+    expect(records.map((r) => r.event)).toEqual([
+      'message_start',
+      'content_block_start',
+      'content_block_delta',
+      'content_block_delta',
+      'content_block_stop',
+      'content_block_start',
+      'content_block_delta',
+      'content_block_stop',
+      'message_delta',
+      'message_stop',
+    ]);
+    expect(records[3].data).toMatchObject({
+      delta: { type: 'signature_delta', signature: 'sig_1' },
+    });
+  });
+
+  it('carries cache tokens onto message_start', () => {
+    const records = parse(
+      encodeAnthropicStream(
+        streamEventsForAnthropicMessage(
+          {
+            content: [],
+            usage: {
+              input_tokens: 3,
+              output_tokens: 1,
+              cache_read_input_tokens: 9,
+              cache_creation_input_tokens: 6,
+            },
+          },
+          'm',
+        ),
+      ),
+    );
+    expect(
+      (records[0].data as { message: { usage: Record<string, number> } })
+        .message.usage,
+    ).toMatchObject({
+      cache_read_input_tokens: 9,
+      cache_creation_input_tokens: 6,
+    });
+  });
+
+  it('falls back to end_turn for an unknown or missing stop reason', () => {
+    for (const stop_reason of [undefined, null, 'nonsense']) {
+      const events = streamEventsForAnthropicMessage(
+        { content: [], stop_reason },
+        'm',
+      );
+      const delta = events.find((e) => e.type === 'message_delta');
+      expect(delta).toMatchObject({ stopReason: 'end_turn' });
+    }
+  });
+
+  it('skips content blocks of an unrecognized type rather than emitting them', () => {
+    // An unknown block would be rejected by the encoder and take the whole
+    // stream down; dropping it keeps the transcript valid.
+    const events = streamEventsForAnthropicMessage(
+      { content: [{ type: 'future_block' }, { type: 'text', text: 'ok' }] },
+      'm',
+    );
+    expect(events.filter((e) => e.type === 'block_start')).toHaveLength(1);
+    expect(() => encodeAnthropicStream(events)).not.toThrow();
+  });
+
+  it('produces a valid empty transcript for a message with no content', () => {
+    const records = parse(
+      encodeAnthropicStream(streamEventsForAnthropicMessage({}, 'm')),
+    );
+    expect(records.map((r) => r.event)).toEqual([
+      'message_start',
+      'message_delta',
+      'message_stop',
+    ]);
   });
 });

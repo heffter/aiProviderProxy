@@ -3,6 +3,7 @@
  */
 
 export * from './transport.js';
+export * from './sse.js';
 export * from './providers.js';
 export * from './server.js';
 

@@ -321,6 +321,147 @@ function frame(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
+/** Stop reasons the Anthropic stream may carry; anything else maps to end_turn. */
+const STOP_REASONS: readonly string[] = [
+  'end_turn',
+  'max_tokens',
+  'stop_sequence',
+  'tool_use',
+  'pause_turn',
+  'refusal',
+];
+
+/** The non-streaming Messages response shape this expander reads. */
+interface AnthropicMessageLike {
+  id?: unknown;
+  content?: unknown;
+  stop_reason?: unknown;
+  stop_sequence?: unknown;
+  usage?: Record<string, unknown>;
+}
+
+/** Read a numeric usage field, ignoring absent or non-numeric values. */
+function usageNumber(
+  usage: Record<string, unknown> | undefined,
+  key: string,
+): number | undefined {
+  const value = usage?.[key];
+  return typeof value === 'number' ? value : undefined;
+}
+
+/** Map an Anthropic `usage` object onto the canonical stream usage shape. */
+function canonicalUsage(
+  usage: Record<string, unknown> | undefined,
+): CanonicalStreamUsage {
+  return {
+    inputTokens: usageNumber(usage, 'input_tokens'),
+    outputTokens: usageNumber(usage, 'output_tokens'),
+    cacheReadTokens: usageNumber(usage, 'cache_read_input_tokens'),
+    cacheWriteTokens: usageNumber(usage, 'cache_creation_input_tokens'),
+  };
+}
+
+/**
+ * Expand the content blocks of a completed message into their canonical events.
+ *
+ * Each block becomes a `block_start` / delta / `block_stop` triple; a block of
+ * an unrecognized type is skipped rather than emitted malformed, because the
+ * encoder would reject it and take the whole stream down with it.
+ */
+function blockEvents(content: unknown): CanonicalStreamEvent[] {
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  const events: CanonicalStreamEvent[] = [];
+  for (const raw of content) {
+    if (typeof raw !== 'object' || raw === null) {
+      continue;
+    }
+    const block = raw as Record<string, unknown>;
+    switch (block.type) {
+      case 'text':
+        events.push({ type: 'block_start', block: { kind: 'text' } });
+        if (typeof block.text === 'string' && block.text.length > 0) {
+          events.push({ type: 'text', text: block.text });
+        }
+        events.push({ type: 'block_stop' });
+        break;
+      case 'tool_use':
+        events.push({
+          type: 'block_start',
+          block: {
+            kind: 'tool_use',
+            id: typeof block.id === 'string' ? block.id : '',
+            name: typeof block.name === 'string' ? block.name : '',
+          },
+        });
+        // The whole argument object arrives as one partial-JSON delta: a
+        // completed message has no finer granularity to reproduce.
+        events.push({
+          type: 'json',
+          partial: JSON.stringify(block.input ?? {}),
+        });
+        events.push({ type: 'block_stop' });
+        break;
+      case 'thinking':
+        events.push({ type: 'block_start', block: { kind: 'thinking' } });
+        if (typeof block.thinking === 'string' && block.thinking.length > 0) {
+          events.push({ type: 'thinking', text: block.thinking });
+        }
+        if (typeof block.signature === 'string' && block.signature.length > 0) {
+          events.push({ type: 'signature', signature: block.signature });
+        }
+        events.push({ type: 'block_stop' });
+        break;
+      default:
+        break;
+    }
+  }
+  return events;
+}
+
+/**
+ * Expand a completed Anthropic message into the stream event script that
+ * reproduces it, mirroring `streamEventsForChatResult` on the Chat surface.
+ *
+ * Used to serve a streaming Messages request from a non-streaming (or
+ * translated) upstream result via {@link encodeAnthropicStream}.
+ *
+ * @param message A non-streaming Messages response body.
+ * @param model The routed model to stamp on `message_start`.
+ * @returns A canonical event script terminating in `message_stop`.
+ */
+export function streamEventsForAnthropicMessage(
+  message: unknown,
+  model: string,
+): CanonicalStreamEvent[] {
+  const body = (
+    typeof message === 'object' && message !== null ? message : {}
+  ) as AnthropicMessageLike;
+  const usage = canonicalUsage(body.usage);
+  const stopReason = STOP_REASONS.includes(body.stop_reason as string)
+    ? (body.stop_reason as AnthropicStopReason)
+    : 'end_turn';
+  return [
+    {
+      type: 'message_start',
+      model,
+      ...(typeof body.id === 'string' ? { id: body.id } : {}),
+      // message_start carries the input side; output tokens land on the delta.
+      usage: { ...usage, outputTokens: 0 },
+    },
+    ...blockEvents(body.content),
+    {
+      type: 'message_delta',
+      stopReason,
+      stopSequence:
+        typeof body.stop_sequence === 'string' ? body.stop_sequence : null,
+      usage,
+    },
+    { type: 'message_stop' },
+  ];
+}
+
 /**
  * Encode a full canonical event script into a single Anthropic SSE transcript.
  * Enforces every invariant of {@link AnthropicSseEncoder} and additionally

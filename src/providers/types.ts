@@ -70,12 +70,27 @@ export interface TransportResponse {
   status: number;
   headers: Record<string, string>;
   body: string;
+  /**
+   * The body delivered incrementally, present only when the caller passed
+   * {@link TransportOptions.stream} and the upstream answered with a successful
+   * event-stream response. When set, {@link body} is empty and the stream is the
+   * only way to read the body; it may be consumed at most once. An error
+   * response is never streamed, so error classification and pre-stream retry
+   * keep working against a fully buffered {@link body}.
+   */
+  stream?: AsyncIterable<string>;
 }
 
 /** Per-call transport options. */
 export interface TransportOptions {
   /** Aborts the in-flight request (e.g. on client disconnect). */
   signal?: AbortSignal;
+  /**
+   * Request the response body incrementally rather than pre-read as text. The
+   * transport honours it only for a successful event-stream response; anything
+   * else (including every error status) is still buffered.
+   */
+  stream?: boolean;
 }
 
 /** Injectable transport used by adapters. */

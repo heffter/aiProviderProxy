@@ -6,5 +6,6 @@ export * from './errors.js';
 export * from './request.js';
 export * from './response.js';
 export * from './stream-encoder.js';
+export * from './stream-translate.js';
 export * from './tools.js';
 export * from './translate.js';

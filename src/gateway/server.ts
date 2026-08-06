@@ -12,7 +12,7 @@
  * `listen()` wraps it in a node:http server.
  */
 
-import { createServer, type Server } from 'node:http';
+import { createServer, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { Config } from '../config/index.js';
 import {
@@ -57,9 +57,11 @@ import {
 import {
   anthropicError,
   anthropicToOpenAIRequest,
+  encodeAnthropicStream,
   openAIResponseToAnthropic,
   parseMessagesRequest,
   statusForAnthropicError,
+  streamEventsForAnthropicMessage,
   type AnthropicErrorEnvelope,
   type AnthropicErrorType,
   type ParsedMessagesRequest,
@@ -120,6 +122,11 @@ import {
   listModels,
 } from './openai-endpoints.js';
 import { httpTransport } from './transport.js';
+import {
+  anthropicToChatStream,
+  chatToAnthropicStream,
+  chatToResponsesStream,
+} from './stream-pipeline.js';
 
 /** A gateway request (transport-agnostic). */
 export interface GatewayRequest {
@@ -136,6 +143,13 @@ export interface GatewayResponse {
   status: number;
   headers: Record<string, string>;
   body: string;
+  /**
+   * A streamed body, written to the client incrementally as it is produced
+   * (Task 17). When set, {@link body} is empty and this is the response payload;
+   * the transport layer flushes the headers first so the client measures a real
+   * time-to-first-token. Consumed at most once.
+   */
+  stream?: AsyncIterable<string>;
 }
 
 export interface GatewayDeps {
@@ -216,6 +230,21 @@ function header(
     }
   }
   return undefined;
+}
+
+/**
+ * Mark a response as an SSE stream (Task 17).
+ *
+ * Beyond the content type, the cache and buffering hints matter for real
+ * time-to-first-token: an intermediary that buffers or caches an event stream
+ * defeats incremental delivery no matter how promptly the gateway writes.
+ */
+function applySseHeaders(headers: Record<string, string>): void {
+  headers['content-type'] = 'text/event-stream';
+  headers['cache-control'] = 'no-cache';
+  headers['connection'] = 'keep-alive';
+  // Tells nginx-style proxies not to buffer the response.
+  headers['x-accel-buffering'] = 'no';
 }
 
 function json(status: number, body: unknown): GatewayResponse {
@@ -1281,9 +1310,14 @@ export class Gateway {
           }
         : {
             model: hop.model,
+            // A translated upstream streams too: its chat SSE is decoded and
+            // re-encoded as Anthropic events chunk by chunk (subtask 17.5).
             stream: parsed.request.stream,
-            body: anthropicToOpenAIRequest(parsed.request, hop.model)
-              .body as unknown as Record<string, unknown>,
+            body: {
+              ...(anthropicToOpenAIRequest(parsed.request, hop.model)
+                .body as unknown as Record<string, unknown>),
+              stream: parsed.request.stream,
+            },
             headers: request.headers,
             upstreamProtocol: 'openai_chat',
           };
@@ -1303,7 +1337,9 @@ export class Gateway {
       try {
         transportResponse = await this.transport(
           adapter.serializeRequest(providerRequest),
-          { signal: request.signal },
+          // Both paths stream: a verbatim Anthropic upstream passes through,
+          // a chat upstream is translated chunk by chunk (subtasks 17.3/17.5).
+          { signal: request.signal, stream: parsed.request.stream },
         );
       } catch (cause) {
         // A client disconnect surfaces as an abort; disambiguate it from an
@@ -1407,6 +1443,34 @@ export class Gateway {
         usage: parsedResponse.usage,
       });
 
+      // Streaming paths. A verbatim Anthropic upstream is already emitting the
+      // client's wire format, so its bytes are forwarded as they arrive; a chat
+      // upstream is decoded and re-encoded as Anthropic events chunk by chunk
+      // (subtask 17.5). Neither buffers a transcript.
+      if (transportResponse.stream) {
+        const outHeaders: Record<string, string> = {};
+        applySseHeaders(outHeaders);
+        if (parsedResponse.providerRequestId) {
+          outHeaders['request-id'] = parsedResponse.providerRequestId;
+        }
+        if (toolsDeniedHeader) {
+          outHeaders['x-aipp-tools-denied'] = toolsDeniedHeader;
+        }
+        applyDowngradeHeaders(outHeaders, downgrade);
+        return {
+          status: 200,
+          headers: outHeaders,
+          body: '',
+          stream: verbatim
+            ? transportResponse.stream
+            : chatToAnthropicStream(
+                transportResponse.stream,
+                { adapter, model: hop.model },
+                { genId: this.deps.genId },
+              ),
+        };
+      }
+
       // Fast path: return the Anthropic body verbatim; otherwise translate.
       const responseBody = verbatim
         ? parsedResponse.body
@@ -1434,6 +1498,20 @@ export class Gateway {
       // Populate the response cache for a deterministic request (miss path).
       if (this.deps.cache && cacheKey) {
         this.deps.cache.set(cacheKey, hop.model, responseBody);
+      }
+      // A streaming client on a translated upstream: re-synthesize the message
+      // as an Anthropic SSE transcript. Still buffered -- the upstream was
+      // dispatched non-streaming -- but at least a spec-valid event stream
+      // rather than a JSON body; subtask 17.5 makes it incremental.
+      if (parsed.request.stream) {
+        applySseHeaders(outHeaders);
+        return {
+          status: 200,
+          headers: outHeaders,
+          body: encodeAnthropicStream(
+            streamEventsForAnthropicMessage(responseBody, hop.model),
+          ),
+        };
       }
       return {
         status: 200,
@@ -1713,7 +1791,9 @@ export class Gateway {
     try {
       transportResponse = await this.transport(
         adapter.serializeRequest(providerRequest),
-        { signal: request.signal },
+        // Both upstream protocols stream: a native one passes through, a chat
+        // one is translated chunk by chunk (subtask 17.4).
+        { signal: request.signal, stream: parsed.request.stream },
       );
     } catch (cause) {
       const category: ErrorCategory = request.signal?.aborted
@@ -1785,20 +1865,48 @@ export class Gateway {
       outHeaders['x-aipp-tools-denied'] = toolsDeniedHeader;
     }
 
-    // Native upstream: forward the Responses body verbatim (object or SSE).
+    // Native upstream: forward the Responses body verbatim (object or SSE). A
+    // streamed body is piped through chunk by chunk (Task 17).
     if (native) {
+      if (transportResponse.stream) {
+        applySseHeaders(outHeaders);
+        return {
+          status: 200,
+          headers: outHeaders,
+          body: '',
+          stream: transportResponse.stream,
+        };
+      }
       if (parsed.request.stream) {
-        outHeaders['content-type'] = 'text/event-stream';
+        applySseHeaders(outHeaders);
       }
       return { status: 200, headers: outHeaders, body: transportResponse.body };
+    }
+
+    const echo = buildResponsesEcho(parsed.request);
+
+    // Chat upstream, streaming: decode the upstream chunks and re-encode them as
+    // Responses events as they arrive (subtask 17.4). Nothing is reconstructed,
+    // so output text reaches the client at the upstream's own pace.
+    if (transportResponse.stream) {
+      applySseHeaders(outHeaders);
+      return {
+        status: 200,
+        headers: outHeaders,
+        body: '',
+        stream: chatToResponsesStream(
+          transportResponse.stream,
+          { adapter, model: resolved.model },
+          { genId: this.deps.genId, now: this.deps.now, echo },
+        ),
+      };
     }
 
     // Chat upstream: reconstruct a canonical result, then render the object or
     // synthesize the streaming transcript from it.
     const result = chatResponseToCanonical(parsedResponse.body, resolved.model);
-    const echo = buildResponsesEcho(parsed.request);
     if (parsed.request.stream) {
-      outHeaders['content-type'] = 'text/event-stream';
+      applySseHeaders(outHeaders);
       const sse = encodeResponsesStream(streamEventsForResult(result), {
         genId: this.deps.genId,
         now: this.deps.now,
@@ -1936,10 +2044,11 @@ export class Gateway {
       }
     }
 
-    // Translated upstreams (Anthropic, Gemini, Ollama) are reconstructed into a
-    // chat.completion and, for streaming clients, re-emitted as a chunk stream;
-    // the upstream is therefore always requested non-streaming. A verbatim
-    // upstream streams through unchanged.
+    // A verbatim upstream streams through unchanged. An Anthropic upstream is
+    // translated chunk by chunk (subtask 17.4), so it streams too. Gemini and
+    // Ollama have no incremental translator yet and stay non-streaming: their
+    // transcript is reconstructed from the completed chat.completion.
+    const streamAnthropic = chatMode === 'anthropic' && parsed.request.stream;
     const providerRequest: CanonicalProviderRequest =
       chatMode === 'verbatim'
         ? {
@@ -1952,11 +2061,14 @@ export class Gateway {
         : chatMode === 'anthropic'
           ? {
               model: resolved.model,
-              stream: false,
-              body: chatToAnthropicRequest(
-                parsed.request,
-                resolved.model,
-              ) as unknown as Record<string, unknown>,
+              stream: streamAnthropic,
+              body: {
+                ...(chatToAnthropicRequest(
+                  parsed.request,
+                  resolved.model,
+                ) as unknown as Record<string, unknown>),
+                stream: streamAnthropic,
+              },
               headers: request.headers,
               upstreamProtocol: 'anthropic',
             }
@@ -1972,7 +2084,14 @@ export class Gateway {
     try {
       transportResponse = await this.transport(
         adapter.serializeRequest(providerRequest),
-        { signal: request.signal },
+        // Verbatim streams through; an Anthropic upstream is translated chunk by
+        // chunk. Everything else is reconstructed from a completed body.
+        {
+          signal: request.signal,
+          stream:
+            (chatMode === 'verbatim' && parsed.request.stream) ||
+            streamAnthropic,
+        },
       );
     } catch (cause) {
       const category: ErrorCategory = request.signal?.aborted
@@ -2044,12 +2163,39 @@ export class Gateway {
       outHeaders['x-aipp-deprecation'] = deprecations.join('; ');
     }
 
-    // Verbatim upstream: forward the chat body unchanged (object or SSE).
+    // Verbatim upstream: forward the chat body unchanged (object or SSE). A
+    // streamed body is piped through chunk by chunk (Task 17).
     if (chatMode === 'verbatim') {
+      if (transportResponse.stream) {
+        applySseHeaders(outHeaders);
+        return {
+          status: 200,
+          headers: outHeaders,
+          body: '',
+          stream: transportResponse.stream,
+        };
+      }
       if (parsed.request.stream) {
-        outHeaders['content-type'] = 'text/event-stream';
+        applySseHeaders(outHeaders);
       }
       return { status: 200, headers: outHeaders, body: transportResponse.body };
+    }
+
+    // Incremental translation: an Anthropic upstream stream is decoded and
+    // re-encoded as chat chunks as its deltas arrive (subtask 17.4), so the
+    // client sees tokens instead of one transcript at completion.
+    if (transportResponse.stream) {
+      applySseHeaders(outHeaders);
+      return {
+        status: 200,
+        headers: outHeaders,
+        body: '',
+        stream: anthropicToChatStream(
+          transportResponse.stream,
+          { adapter, model: resolved.model },
+          { genId: this.deps.genId, now: this.deps.now },
+        ),
+      };
     }
 
     // Reconstruct a canonical chat result. The Anthropic path additionally
@@ -2187,13 +2333,7 @@ export class Gateway {
           headers: req.headers as Record<string, string>,
           body,
           signal: controller.signal,
-        }).then((response) => {
-          if (res.writableEnded || controller.signal.aborted) {
-            return; // client already gone; nothing to write
-          }
-          res.writeHead(response.status, response.headers);
-          res.end(response.body);
-        });
+        }).then((response) => writeResponse(res, response, controller.signal));
       });
     });
     await new Promise<void>((resolve) =>
@@ -2206,6 +2346,73 @@ export class Gateway {
   close(): void {
     this.server?.close();
     this.server = undefined;
+  }
+}
+
+/**
+ * Wait for the socket's write buffer to drain, or for the client to hang up.
+ *
+ * Racing `close` against `drain` matters: a client that disappears mid-stream
+ * never drains, so awaiting `drain` alone would hang the handler forever.
+ */
+function drained(res: ServerResponse): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const finish = (): void => {
+      res.off('drain', finish);
+      res.off('close', finish);
+      resolve();
+    };
+    res.once('drain', finish);
+    res.once('close', finish);
+  });
+}
+
+/**
+ * Write a gateway response to the node:http socket (Task 17, subtask 17.2).
+ *
+ * A buffered response is a single `end()`, exactly as before. A streamed
+ * response flushes the headers immediately -- so a streaming client sees the
+ * response open before the first token exists -- then writes each chunk the
+ * moment it is produced, honouring backpressure so a slow client cannot make
+ * the gateway buffer the whole transcript in memory.
+ *
+ * @param res The node response.
+ * @param response The gateway response, buffered or streamed.
+ * @param signal Aborted when the client disconnects.
+ */
+export async function writeResponse(
+  res: ServerResponse,
+  response: GatewayResponse,
+  signal: AbortSignal,
+): Promise<void> {
+  if (res.writableEnded || signal.aborted) {
+    return; // client already gone; nothing to write
+  }
+  try {
+    res.writeHead(response.status, response.headers);
+    if (!response.stream) {
+      res.end(response.body);
+      return;
+    }
+    res.flushHeaders();
+    for await (const chunk of response.stream) {
+      if (res.writableEnded || signal.aborted) {
+        // Client hung up mid-stream. Leaving the loop closes the iterator,
+        // which releases the upstream reader.
+        return;
+      }
+      if (!res.write(chunk)) {
+        await drained(res);
+      }
+    }
+  } catch {
+    // The socket failed, or the upstream stream broke after we had already
+    // committed to a status. Nothing can be renegotiated here -- post-stream
+    // retry is forbidden -- so close the response and let the client's SSE
+    // parser observe a truncated stream.
+  }
+  if (!res.writableEnded) {
+    res.end();
   }
 }
 
