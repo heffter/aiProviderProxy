@@ -1,5 +1,40 @@
 # Changelog
 
+## 2.1.0 (unreleased)
+
+Work that landed after the `v2.0.0` tag (`1ba4a9e`).
+
+### Changed
+
+- **Incremental client-side streaming** — a `stream: true` request is now served
+  incrementally on every surface instead of being buffered. A verbatim upstream
+  is forwarded byte for byte as chunks arrive; a translated upstream is decoded
+  and re-encoded one frame at a time, so client time-to-first-token tracks
+  upstream TTFT rather than upstream completion. Gemini and Ollama chat
+  upstreams have no incremental translator and remain buffered. See
+  `docs/architecture/streaming.md`.
+- A streaming request's usage event is emitted when the stream ends, carrying
+  the token counts from the upstream's trailing frames; previously a streamed
+  response reported no usage at all.
+
+### Fixed
+
+- `POST /v1/messages` with `stream: true` returned a JSON body rather than an
+  event stream. On a native Anthropic upstream it returned the raw SSE text
+  JSON-stringified as `application/json`; on a translated upstream it fed
+  upstream SSE to the object translator. No Anthropic SSE client could consume
+  either.
+- `POST /v1/responses` with `stream: true` on a chat upstream requested a
+  streaming upstream and then parsed the resulting SSE text as a completed
+  `chat.completion`.
+
+### Added
+
+- Cross-source dedup overlap harness (`test/live/tokemetry-overlap.mjs`) and
+  gate-runnable coverage that a provider request id reaches the ingest
+  `event_id`, which is what makes proxy and transcript-collector reports
+  collapse to one row.
+
 ## 2.0.0
 
 The greenfield rewrite. aiproviderproxy replaces the legacy RelayPlane proxy: a
@@ -34,30 +69,9 @@ package is renamed to `aiproviderproxy` and the CLI to `aipp`.
 
 ### Changed
 
-- **Incremental client-side streaming** — a `stream: true` request is now served
-  incrementally on every surface instead of being buffered. A verbatim upstream
-  is forwarded byte for byte as chunks arrive; a translated upstream is decoded
-  and re-encoded one frame at a time, so client time-to-first-token tracks
-  upstream TTFT rather than upstream completion. Gemini and Ollama chat
-  upstreams have no incremental translator and remain buffered. See
-  `docs/architecture/streaming.md`.
-- A streaming request's usage event is emitted when the stream ends, carrying
-  the token counts from the upstream's trailing frames; previously a streamed
-  response reported no usage at all.
 - Two documented parity differences from the legacy proxy (both improvements):
   cache-read tokens are preserved into usage, and Anthropic thinking blocks
   surface a counts-only diagnostics header instead of being dropped.
-
-### Fixed
-
-- `POST /v1/messages` with `stream: true` returned a JSON body rather than an
-  event stream. On a native Anthropic upstream it returned the raw SSE text
-  JSON-stringified as `application/json`; on a translated upstream it fed
-  upstream SSE to the object translator. No Anthropic SSE client could consume
-  either.
-- `POST /v1/responses` with `stream: true` on a chat upstream requested a
-  streaming upstream and then parsed the resulting SSE text as a completed
-  `chat.completion`.
 
 ### Removed
 

@@ -26,4 +26,4 @@ export const HOME_DIR_NAME = '.aiproviderproxy';
  * declared here because `tsc` (rootDir `./src`) cannot import the manifest.
  * Reported to Tokemetry as the source version of exported usage events.
  */
-export const PRODUCT_VERSION = '2.0.0';
+export const PRODUCT_VERSION = '2.1.0';
