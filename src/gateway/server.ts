@@ -126,6 +126,8 @@ import {
   anthropicToChatStream,
   chatToAnthropicStream,
   chatToResponsesStream,
+  observeVerbatimStream,
+  type StreamUsage,
 } from './stream-pipeline.js';
 
 /** A gateway request (transport-agnostic). */
@@ -858,6 +860,45 @@ export class Gateway {
   }
 
   /**
+   * Build the completion callback that emits a streaming response's usage event
+   * (Task 17, subtask 17.6).
+   *
+   * A streaming request's token counts only exist once the upstream's trailing
+   * frames arrive -- long after the status and headers were committed -- so
+   * emitting at dispatch time reports zero tokens for every stream. The emit is
+   * therefore deferred to the pipeline's completion callback, which fires on a
+   * normal end, a truncated stream, or a client disconnect.
+   *
+   * @param emit Called once with the upstream-reported usage, or undefined when
+   *   the upstream reported none (which marks the event a local estimate).
+   * @returns A completion callback safe to pass to a stream pipeline.
+   */
+  private emitOnStreamEnd(
+    emit: (usage: ProviderUsage | undefined) => void,
+  ): (usage: StreamUsage) => void {
+    let emitted = false;
+    return (usage) => {
+      if (emitted) {
+        return; // a pipeline completes once; guard against a double drain
+      }
+      emitted = true;
+      const reported =
+        usage.inputTokens !== undefined || usage.outputTokens !== undefined;
+      emit(
+        reported
+          ? {
+              inputTokens: usage.inputTokens ?? 0,
+              outputTokens: usage.outputTokens ?? 0,
+              ...(usage.cachedTokens !== undefined
+                ? { cacheReadTokens: usage.cachedTokens }
+                : {}),
+            }
+          : undefined,
+      );
+    };
+  }
+
+  /**
    * Record the winning attempt's request/response into the local content buffer
    * so the HistorySink can write them to history.jsonl. Gated on
    * `contentLog.enabled`; a no-op when content logging is off or no buffer is
@@ -1433,20 +1474,23 @@ export class Gateway {
         providerRequest.body,
         parsedResponse.body,
       );
-      this.emit(ctx, attempt, {
-        success: true,
-        outcome: 'success',
-        httpStatus: transportResponse.status,
-        providerRequestId: parsedResponse.providerRequestId,
-        providerResponseId: parsedResponse.providerResponseId,
-        stopReason: parsedResponse.stopReason,
-        usage: parsedResponse.usage,
-      });
+      const emitSuccess = (usage: ProviderUsage | undefined): void => {
+        this.emit(ctx, attempt, {
+          success: true,
+          outcome: 'success',
+          httpStatus: transportResponse.status,
+          providerRequestId: parsedResponse.providerRequestId,
+          providerResponseId: parsedResponse.providerResponseId,
+          stopReason: parsedResponse.stopReason,
+          usage,
+        });
+      };
 
       // Streaming paths. A verbatim Anthropic upstream is already emitting the
       // client's wire format, so its bytes are forwarded as they arrive; a chat
       // upstream is decoded and re-encoded as Anthropic events chunk by chunk
-      // (subtask 17.5). Neither buffers a transcript.
+      // (subtask 17.5). Neither buffers a transcript, and both report usage only
+      // once the stream ends (subtask 17.6).
       if (transportResponse.stream) {
         const outHeaders: Record<string, string> = {};
         applySseHeaders(outHeaders);
@@ -1457,19 +1501,26 @@ export class Gateway {
           outHeaders['x-aipp-tools-denied'] = toolsDeniedHeader;
         }
         applyDowngradeHeaders(outHeaders, downgrade);
+        const onComplete = this.emitOnStreamEnd(emitSuccess);
         return {
           status: 200,
           headers: outHeaders,
           body: '',
           stream: verbatim
-            ? transportResponse.stream
+            ? observeVerbatimStream(transportResponse.stream, {
+                adapter,
+                protocol: 'anthropic',
+                onComplete,
+              })
             : chatToAnthropicStream(
                 transportResponse.stream,
-                { adapter, model: hop.model },
+                { adapter, model: hop.model, onComplete },
                 { genId: this.deps.genId },
               ),
         };
       }
+
+      emitSuccess(parsedResponse.usage);
 
       // Fast path: return the Anthropic body verbatim; otherwise translate.
       const responseBody = verbatim
@@ -1845,15 +1896,17 @@ export class Gateway {
       providerRequest.body,
       parsedResponse.body,
     );
-    this.emit(ctx, attempt, {
-      success: true,
-      outcome: 'success',
-      httpStatus: transportResponse.status,
-      providerRequestId: parsedResponse.providerRequestId,
-      providerResponseId: parsedResponse.providerResponseId,
-      stopReason: parsedResponse.stopReason,
-      usage: parsedResponse.usage,
-    });
+    const emitSuccess = (usage: ProviderUsage | undefined): void => {
+      this.emit(ctx, attempt, {
+        success: true,
+        outcome: 'success',
+        httpStatus: transportResponse.status,
+        providerRequestId: parsedResponse.providerRequestId,
+        providerResponseId: parsedResponse.providerResponseId,
+        stopReason: parsedResponse.stopReason,
+        usage,
+      });
+    };
 
     const outHeaders: Record<string, string> = {
       'content-type': 'application/json',
@@ -1874,9 +1927,14 @@ export class Gateway {
           status: 200,
           headers: outHeaders,
           body: '',
-          stream: transportResponse.stream,
+          stream: observeVerbatimStream(transportResponse.stream, {
+            adapter,
+            protocol: 'openai_responses',
+            onComplete: this.emitOnStreamEnd(emitSuccess),
+          }),
         };
       }
+      emitSuccess(parsedResponse.usage);
       if (parsed.request.stream) {
         applySseHeaders(outHeaders);
       }
@@ -1896,11 +1954,17 @@ export class Gateway {
         body: '',
         stream: chatToResponsesStream(
           transportResponse.stream,
-          { adapter, model: resolved.model },
+          {
+            adapter,
+            model: resolved.model,
+            onComplete: this.emitOnStreamEnd(emitSuccess),
+          },
           { genId: this.deps.genId, now: this.deps.now, echo },
         ),
       };
     }
+
+    emitSuccess(parsedResponse.usage);
 
     // Chat upstream: reconstruct a canonical result, then render the object or
     // synthesize the streaming transcript from it.
@@ -2140,15 +2204,17 @@ export class Gateway {
       providerRequest.body,
       parsedResponse.body,
     );
-    this.emit(ctx, attempt, {
-      success: true,
-      outcome: 'success',
-      httpStatus: transportResponse.status,
-      providerRequestId: parsedResponse.providerRequestId,
-      providerResponseId: parsedResponse.providerResponseId,
-      stopReason: parsedResponse.stopReason,
-      usage: parsedResponse.usage,
-    });
+    const emitSuccess = (usage: ProviderUsage | undefined): void => {
+      this.emit(ctx, attempt, {
+        success: true,
+        outcome: 'success',
+        httpStatus: transportResponse.status,
+        providerRequestId: parsedResponse.providerRequestId,
+        providerResponseId: parsedResponse.providerResponseId,
+        stopReason: parsedResponse.stopReason,
+        usage,
+      });
+    };
 
     const outHeaders: Record<string, string> = {
       'content-type': 'application/json',
@@ -2172,9 +2238,14 @@ export class Gateway {
           status: 200,
           headers: outHeaders,
           body: '',
-          stream: transportResponse.stream,
+          stream: observeVerbatimStream(transportResponse.stream, {
+            adapter,
+            protocol: 'openai_chat',
+            onComplete: this.emitOnStreamEnd(emitSuccess),
+          }),
         };
       }
+      emitSuccess(parsedResponse.usage);
       if (parsed.request.stream) {
         applySseHeaders(outHeaders);
       }
@@ -2192,11 +2263,17 @@ export class Gateway {
         body: '',
         stream: anthropicToChatStream(
           transportResponse.stream,
-          { adapter, model: resolved.model },
+          {
+            adapter,
+            model: resolved.model,
+            onComplete: this.emitOnStreamEnd(emitSuccess),
+          },
           { genId: this.deps.genId, now: this.deps.now },
         ),
       };
     }
+
+    emitSuccess(parsedResponse.usage);
 
     // Reconstruct a canonical chat result. The Anthropic path additionally
     // surfaces cache tokens (fix 1) and diagnoses dropped thinking blocks

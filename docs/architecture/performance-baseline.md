@@ -33,11 +33,22 @@ Representative single run:
 - The gateway's per-request overhead (parse -> route -> translate -> emit) is
   three orders of magnitude under the 50 ms budget; provider round-trip time
   dominates real latency, as intended.
-- Streaming TTFT overhead is bounded by the same parse/route path plus SSE
-  synthesis; because translated streams are buffered (dispatch non-streaming,
-  synthesize the transcript), the added TTFT is the encoder cost over a
-  reconstructed result, well within the 100 ms budget. A live TTFT measurement
-  against a real upstream is part of the release acceptance run (AC).
+- Streaming TTFT overhead is bounded by the same parse/route path plus the
+  per-frame decode/translate/encode cost. Since Task 17 no stream is buffered:
+  a verbatim upstream is forwarded byte for byte as chunks arrive, and a
+  translated upstream is decoded and re-encoded one frame at a time, so client
+  TTFT tracks upstream TTFT rather than upstream completion. The gateway adds
+  one SSE reframe plus one encode per event, far inside the 100 ms budget. A
+  live TTFT measurement against a real upstream is part of the release
+  acceptance run (AC).
+- The two exceptions still reconstruct from a completed body, because they have
+  no incremental translator: Gemini and Ollama chat upstreams. Their streaming
+  clients see the whole transcript at completion.
+- A streaming request's usage event is emitted when the stream ends, not when it
+  is dispatched: the token counts arrive in the upstream's trailing frames. The
+  event therefore lands after the response body has been fully written, which is
+  the correct ordering for telemetry but means a streamed request's usage is not
+  observable mid-flight.
 - The outbox is a synchronous commit-before-export SQLite insert; its p95 is far
   under the 5 ms budget, so telemetry never gates the request path.
 
