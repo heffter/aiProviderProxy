@@ -1,5 +1,38 @@
 # Changelog
 
+## 2.1.1 (unreleased)
+
+Work that landed after the `v2.1.0` tag.
+
+### Fixed
+
+- `POST /v1/messages` rejected mid-conversation system messages with
+  `400 messages.N.role: must be "user" or "assistant"`. Claude Code places
+  operator instructions as `{"role":"system"}` entries inside the `messages`
+  array so they do not invalidate the cached prefix; the upstream accepts this
+  on models that support it, but the gateway's parser allowed only `user` and
+  `assistant`. The error came from the gateway, not the upstream, and made the
+  Messages surface unusable for any conversation carrying one. Placement rules
+  are deliberately left to the upstream — a proxy stricter than the API it
+  fronts produces failures a client cannot work around.
+
+### Security
+
+- Upgraded the `vitest` / `@vitest/coverage-v8` dev toolchain from 1.x to 4.x,
+  clearing five advisories rooted in `esbuild` (reached through `vite` and
+  `vite-node`). All were development-only — the shipped dependency set is
+  `better-sqlite3`, `js-yaml`, and `zod` — but no in-range fix existed, since
+  the patch lands in `vite` 6.4.3 and the toolchain was pinned to `vite` 5.
+  `npm audit` now reports zero findings for the full tree and for production
+  alone; `trivy fs` reports no HIGH/CRITICAL.
+
+### Changed
+
+- Reported coverage moved from 95.77% to 91.88% lines. No source or test
+  changed: vitest 4's v8 provider remaps coverage more accurately, so the new
+  figure is a better measurement rather than a regression. Both sit well above
+  the 80% line / 70% branch gate.
+
 ## 2.1.0 (unreleased)
 
 Work that landed after the `v2.0.0` tag (`1ba4a9e`).
