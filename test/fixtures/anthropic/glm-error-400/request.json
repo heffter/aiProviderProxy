@@ -1,0 +1,19 @@
+{
+  "method": "POST",
+  "url": "/v1/messages/count_tokens",
+  "headers": {
+    "content-type": "application/json",
+    "accept": "*/*",
+    "user-agent": "node",
+    "accept-encoding": "gzip, deflate"
+  },
+  "body": {
+    "model": "glm",
+    "messages": [
+      {
+        "role": "user",
+        "content": "<scrubbed:31:139b7088>"
+      }
+    ]
+  }
+}

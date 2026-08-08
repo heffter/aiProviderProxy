@@ -1,0 +1,23 @@
+{
+  "status": 200,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "id": "<scrubbed:30:761467fa>",
+    "type": "message",
+    "role": "assistant",
+    "model": "glm-5.2",
+    "content": [
+      {
+        "type": "thinking",
+        "thinking": "<scrubbed:101:fe49f726>"
+      }
+    ],
+    "stop_reason": "max_tokens",
+    "usage": {
+      "input_tokens": 24,
+      "output_tokens": 32
+    }
+  }
+}

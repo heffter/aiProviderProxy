@@ -111,6 +111,7 @@ import {
   summarize,
 } from '../ops/dashboard/index.js';
 import { dataFile, DATA_FILES } from '../ops/trackers/paths.js';
+import { tapExchange } from '../fixtures/gateway-tap.js';
 import { exporterHealth } from '../integrations/tokemetry/index.js';
 import { isLoopbackHost } from '../config/loader.js';
 import { timingSafeEqualStr } from '../config/security.js';
@@ -2454,13 +2455,19 @@ export class Gateway {
         body += c;
       });
       req.on('end', () => {
-        void this.handle({
+        const request = {
           method: req.method ?? 'GET',
           url: req.url ?? '/',
           headers: req.headers as Record<string, string>,
           body,
           signal: controller.signal,
-        }).then((response) => writeResponse(res, response, controller.signal));
+        };
+        void this.handle(request).then((response) =>
+          // Fixture recording (subtask 1.3) sits here, at the client boundary,
+          // so it observes the exchange the client actually had. It returns the
+          // same object untouched unless AIPP_RECORD_FIXTURES is set.
+          writeResponse(res, tapExchange(request, response), controller.signal),
+        );
       });
     });
     await new Promise<void>((resolve) =>

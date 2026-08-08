@@ -1,0 +1,27 @@
+{
+  "status": 200,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "id": "<scrubbed:30:8e2f7702>",
+    "type": "message",
+    "role": "assistant",
+    "model": "glm-5.2",
+    "content": [
+      {
+        "type": "thinking",
+        "thinking": "<scrubbed:87:e667fdf9>"
+      },
+      {
+        "type": "text",
+        "text": "<scrubbed:2:2689367b>"
+      }
+    ],
+    "stop_reason": "end_turn",
+    "usage": {
+      "input_tokens": 19,
+      "output_tokens": 24
+    }
+  }
+}

@@ -41,10 +41,19 @@ import {
   HEADER_ALLOWLIST,
 } from './scrubber.js';
 
-/** The four provider corpus directories. */
+/**
+ * The corpus directories.
+ *
+ * `anthropic`, `openai-chat`, `gemini` and `ollama` date from the legacy-parity
+ * corpus, where a directory named the upstream provider. `openai-responses` was
+ * added with the gateway tap (subtask 1.3), which records client surfaces
+ * instead -- there is no Responses *provider*, but there is a Responses
+ * surface. The older names are kept so the existing cases stay valid.
+ */
 export const PROVIDER_DIRS = [
   'anthropic',
   'openai-chat',
+  'openai-responses',
   'gemini',
   'ollama',
 ] as const;

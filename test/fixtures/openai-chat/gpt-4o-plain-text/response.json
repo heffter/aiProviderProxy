@@ -1,0 +1,42 @@
+{
+  "status": 200,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "id": "<scrubbed:38:8e16d6ff>",
+    "object": "chat.completion",
+    "created": 1786222233,
+    "model": "gpt-4o-2024-08-06",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "<scrubbed:2:2689367b>",
+          "refusal": null,
+          "annotations": []
+        },
+        "logprobs": null,
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 14,
+      "completion_tokens": 1,
+      "total_tokens": 15,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "audio_tokens": 0
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "audio_tokens": 0,
+        "accepted_prediction_tokens": 0,
+        "rejected_prediction_tokens": 0
+      }
+    },
+    "service_tier": "<scrubbed:7:37a8eec1>",
+    "system_fingerprint": "<scrubbed:13:602167ff>"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "status": 200,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "id": "<scrubbed:30:c484befe>",
+    "type": "message",
+    "role": "assistant",
+    "model": "glm-5.2",
+    "content": [
+      {
+        "type": "thinking",
+        "thinking": "<scrubbed:110:b24ca049>"
+      },
+      {
+        "type": "tool_use",
+        "id": "<scrubbed:25:7cb050f0>",
+        "name": "get_weather",
+        "input": {}
+      }
+    ],
+    "stop_reason": "tool_use",
+    "usage": {
+      "input_tokens": 171,
+      "output_tokens": 32
+    }
+  }
+}

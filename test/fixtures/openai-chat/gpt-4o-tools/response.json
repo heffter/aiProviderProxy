@@ -1,0 +1,52 @@
+{
+  "status": 200,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "id": "<scrubbed:38:3a41647b>",
+    "object": "chat.completion",
+    "created": 1786222234,
+    "model": "gpt-4o-2024-08-06",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": null,
+          "tool_calls": [
+            {
+              "id": "<scrubbed:29:8a8aa1f8>",
+              "type": "function",
+              "function": {
+                "name": "get_weather",
+                "arguments": "<scrubbed:23:85a44c63>"
+              }
+            }
+          ],
+          "refusal": null,
+          "annotations": []
+        },
+        "logprobs": null,
+        "finish_reason": "tool_calls"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 53,
+      "completion_tokens": 15,
+      "total_tokens": 68,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "audio_tokens": 0
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "audio_tokens": 0,
+        "accepted_prediction_tokens": 0,
+        "rejected_prediction_tokens": 0
+      }
+    },
+    "service_tier": "<scrubbed:7:37a8eec1>",
+    "system_fingerprint": "<scrubbed:13:602167ff>"
+  }
+}

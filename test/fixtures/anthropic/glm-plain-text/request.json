@@ -1,0 +1,20 @@
+{
+  "method": "POST",
+  "url": "/v1/messages",
+  "headers": {
+    "content-type": "application/json",
+    "accept": "*/*",
+    "user-agent": "node",
+    "accept-encoding": "gzip, deflate"
+  },
+  "body": {
+    "max_tokens": 32,
+    "messages": [
+      {
+        "role": "user",
+        "content": "<scrubbed:31:139b7088>"
+      }
+    ],
+    "model": "glm"
+  }
+}

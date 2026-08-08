@@ -1,0 +1,40 @@
+{
+  "method": "POST",
+  "url": "/v1/chat/completions",
+  "headers": {
+    "content-type": "application/json",
+    "accept": "*/*",
+    "user-agent": "node",
+    "accept-encoding": "gzip, deflate"
+  },
+  "body": {
+    "model": "gpt-4o",
+    "max_tokens": 64,
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "get_weather",
+          "description": "Get the current weather for a city.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "location": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "location"
+            ]
+          }
+        }
+      }
+    ],
+    "messages": [
+      {
+        "role": "user",
+        "content": "<scrubbed:34:6c36cc35>"
+      }
+    ]
+  }
+}

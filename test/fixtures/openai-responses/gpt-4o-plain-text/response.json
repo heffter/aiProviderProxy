@@ -1,0 +1,98 @@
+{
+  "status": 200,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "id": "<scrubbed:55:e68c3356>",
+    "object": "response",
+    "created_at": 1786222235,
+    "status": "<scrubbed:9:4ddb3e96>",
+    "background": false,
+    "billing": {
+      "payer": "<scrubbed:9:88fa0d75>"
+    },
+    "completed_at": 1786222236,
+    "error": null,
+    "frequency_penalty": 0,
+    "incomplete_details": null,
+    "instructions": null,
+    "max_output_tokens": null,
+    "max_tool_calls": null,
+    "model": "gpt-4o-2024-08-06",
+    "moderation": null,
+    "output": [
+      {
+        "id": "<scrubbed:54:b7f6419f>",
+        "type": "message",
+        "status": "<scrubbed:9:4ddb3e96>",
+        "content": [
+          {
+            "type": "output_text",
+            "annotations": [],
+            "logprobs": [],
+            "text": "<scrubbed:2:2689367b>"
+          }
+        ],
+        "role": "assistant"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "<scrubbed:9:f35aacd3>",
+    "reasoning": {
+      "context": null,
+      "effort": null,
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "<scrubbed:7:37a8eec1>",
+    "store": true,
+    "temperature": 1,
+    "text": {
+      "format": {
+        "type": "text"
+      },
+      "verbosity": "<scrubbed:6:c082456a>"
+    },
+    "tool_choice": "auto",
+    "tool_usage": {
+      "image_gen": {
+        "input_tokens": 0,
+        "input_tokens_details": {
+          "image_tokens": 0,
+          "text_tokens": 0
+        },
+        "output_tokens": 0,
+        "output_tokens_details": {
+          "image_tokens": 0,
+          "text_tokens": 0
+        },
+        "total_tokens": 0
+      },
+      "web_search": {
+        "num_requests": 0
+      }
+    },
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 1,
+    "truncation": "<scrubbed:8:17eb3c01>",
+    "usage": {
+      "input_tokens": 14,
+      "input_tokens_details": {
+        "cache_write_tokens": 0,
+        "cached_tokens": 0
+      },
+      "output_tokens": 2,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 16
+    },
+    "user": null,
+    "metadata": {}
+  }
+}

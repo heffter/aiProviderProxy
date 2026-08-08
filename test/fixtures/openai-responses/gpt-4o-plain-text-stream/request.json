@@ -1,0 +1,15 @@
+{
+  "method": "POST",
+  "url": "/v1/responses",
+  "headers": {
+    "content-type": "application/json",
+    "accept": "*/*",
+    "user-agent": "node",
+    "accept-encoding": "gzip, deflate"
+  },
+  "body": {
+    "model": "gpt-4o",
+    "input": "<scrubbed:31:139b7088>",
+    "stream": true
+  }
+}

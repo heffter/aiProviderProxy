@@ -1,0 +1,38 @@
+{
+  "method": "POST",
+  "url": "/v1/messages",
+  "headers": {
+    "content-type": "application/json",
+    "accept": "*/*",
+    "user-agent": "node",
+    "accept-encoding": "gzip, deflate"
+  },
+  "body": {
+    "max_tokens": 32,
+    "messages": [
+      {
+        "role": "user",
+        "content": "<scrubbed:34:6c36cc35>"
+      }
+    ],
+    "model": "glm",
+    "tools": [
+      {
+        "name": "get_weather",
+        "description": "Get the current weather for a city.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "location": {
+              "type": "string",
+              "description": "City name"
+            }
+          },
+          "required": [
+            "location"
+          ]
+        }
+      }
+    ]
+  }
+}

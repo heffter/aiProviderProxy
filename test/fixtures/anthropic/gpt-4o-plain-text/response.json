@@ -1,0 +1,23 @@
+{
+  "status": 200,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "id": "<scrubbed:38:077c91b3>",
+    "type": "message",
+    "role": "assistant",
+    "model": "gpt-4o",
+    "content": [
+      {
+        "type": "text",
+        "text": "<scrubbed:2:2689367b>"
+      }
+    ],
+    "stop_reason": "end_turn",
+    "usage": {
+      "input_tokens": 14,
+      "output_tokens": 1
+    }
+  }
+}

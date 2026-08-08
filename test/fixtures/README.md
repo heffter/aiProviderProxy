@@ -1,36 +1,65 @@
 # Protocol conformance fixture corpus
 
-Recorded, sanitized captures of the **legacy proxy** (`src/standalone-proxy.ts`)
-used as the behavioral reference for the greenfield gateway rewrite (epic
-AIPP-1; requirements PP-013, G-010, NFR-MAIN-002, FR-ANTH-017). The parity
-harness (subtask 1.4) replays these fixtures against both the legacy proxy and
-the new gateway and diffs the results.
+Recorded, sanitized captures used as the behavioral reference for the gateway
+(epic AIPP-1; requirements PP-013, G-010, NFR-MAIN-002, FR-ANTH-017). The parity
+harness (subtask 1.4) replays these fixtures and diffs the results.
+
+## Two eras, on purpose
+
+The corpus was specified as a **parity baseline**: captures of the legacy proxy
+(`src/standalone-proxy.ts`), to prove the greenfield gateway matched the stack it
+replaced. That framing is no longer available. The rewrite removed
+`standalone-proxy.ts`, its private `@relayplane` dependencies are not present,
+and v2.1.0 has shipped — there is no legacy stack left to diff against, and
+recording the gateway and calling it the baseline would only prove the gateway
+matches itself.
+
+What is still worth freezing is the gateway's own client-facing behaviour, so
+real captures are recorded as a **regression** corpus: a case answers "what does
+this surface return for this request", and a diff against it catches a change in
+translation, streaming, or error shaping.
+
+Consequently the corpus holds two kinds of case:
+
+| Kind | Named | Origin |
+|---|---|---|
+| **real** | `<model>-<feature>[-stream]` | recorded from the gateway via the tap below |
+| **synthetic** | `<feature>[-stream]` | hand-authored, see [SYNTHETIC.md](SYNTHETIC.md) |
 
 ## Layout
 
 ```
 test/fixtures/
-  <provider>/<case>/
+  <dir>/<case>/
     request.json     scrubbed request  { method, url, headers, body }
     response.json    scrubbed unary response { status, headers, body }
     stream.jsonl     one scrubbed SSE event per line { event, data }
-  tools/             capture + scrub + lint tooling (see below)
 ```
 
-- **Provider** is one of `anthropic`, `openai-chat`, `gemini`, `ollama` (the
-  parent directory name).
 - A case is **unary** (`request.json` + `response.json`) or **streaming**
   (`request.json` + `stream.jsonl`). Route is carried by `request.url`;
-  streaming is implied by the presence of `stream.jsonl`.
+  streaming is implied by the presence of `stream.jsonl`, which is why a
+  streaming case name carries a `-stream` suffix — sharing a directory would
+  make the case ambiguous.
+- `<dir>` is `anthropic`, `openai-chat`, `openai-responses`, `gemini`, or
+  `ollama`. The first two and the last two are inherited from the parity era,
+  where a directory named the upstream *provider*. `openai-responses` came with
+  the tap, which records by *client surface* — there is no Responses provider,
+  but there is a Responses surface. Real cases record the upstream that served
+  them in `meta`, not in the path.
 
-## Tooling (`test/fixtures/tools/`)
+## Tooling
 
 | File | Purpose |
 |---|---|
-| `scrubber.ts` | Removes prompt/response text and every credential family; preserves structure (block types, roles, model ids, tool schemas, event ordering, usage numbers). |
-| `recorder.ts` | Shapes a raw interaction into a scrubbed fixture; opt-in via `AIPP_RECORD_FIXTURES`. |
-| `corpus.ts` | Case-directory layout, the `recordCorpusCase` tap, and the linter. |
-| `lint-corpus.ts` | CLI wrapper that lints the committed corpus and prints the coverage matrix. |
+| `src/fixtures/scrubber.ts` | Removes prompt/response text and every credential family; preserves structure (block types, roles, model ids, tool schemas, event ordering, usage numbers). |
+| `src/fixtures/recorder.ts` | Shapes a raw interaction into a scrubbed fixture. |
+| `src/fixtures/corpus.ts` | Case-directory layout, the `recordCorpusCase` tap, and the linter. |
+| `src/fixtures/gateway-tap.ts` | The live tap: records a client exchange, unary or streamed, from inside the running gateway. |
+| `test/fixtures/tools/lint-corpus.ts` | CLI wrapper that lints the committed corpus and prints the coverage matrix. |
+
+`test/fixtures/tools/` re-exports the `src/fixtures/` modules so existing import
+paths keep working.
 
 ### Scrubbing guarantees (enforced by `lint-corpus`)
 
@@ -38,26 +67,39 @@ test/fixtures/
 2. Every content-position string is a deterministic placeholder `<scrubbed:len:sha8>` (or `<redacted:secret>`); no raw prompt/response text survives.
 3. Only allowlisted headers are kept (`content-type`, `accept`, `accept-encoding`, `anthropic-version`, `anthropic-beta`, `user-agent`); auth headers are dropped.
 
+Tool **schemas** are preserved deliberately — names, descriptions and parameter
+shapes — because the harness needs them to replay a tool-use case. Bear that in
+mind before recording traffic whose tool descriptions you would not commit.
+
 ## Recording
 
 Recording is **opt-in and behavior-neutral** — nothing is written unless
 `AIPP_RECORD_FIXTURES` points at a directory:
 
 ```
-AIPP_RECORD_FIXTURES=test/fixtures <run the legacy proxy and drive representative traffic>
+AIPP_RECORD_FIXTURES=test/fixtures aipp start
+<drive representative traffic>
 ```
 
-The proxy-side tap is `recordExchange(rawCapture, provider)` (auto-named) or
-`recordCorpusCase(rawCapture, provider, caseName)`, implemented in
-`src/fixtures/corpus.ts` and re-exported from `tools/corpus.ts`. The live proxy
-(`src/standalone-proxy.ts`) calls the tap at its capture points, guarded by
-`isRecordingEnabled()` and wrapped so recording can never affect a response. See
-`src/standalone-proxy.ts` (search `AIPP_RECORD_FIXTURES`).
+The tap (`src/fixtures/gateway-tap.ts`, wired in `Gateway.listen`) sits between
+`handle()` and `writeResponse()`, the only point where both sides of the client
+exchange are in hand. Capturing deeper in would record the *upstream* view,
+which for a translated route is a different protocol from the one the client
+spoke and cannot be replayed against the surface it came from.
 
-> The wired call was authored against the legacy proxy but has **not** been
-> smoke-tested against a running proxy in this environment (it cannot be built
-> here). It is guarded and behavior-neutral by construction; verify on first
-> real capture.
+Guarantees, both covered by `gateway-tap.test.ts`:
+
+- With the variable unset, `tapExchange` returns the identical response object —
+  no wrapping, no parsing, no allocation.
+- With it set, every chunk reaches the client unchanged and in order. Each chunk
+  is parsed for recording *before* it is yielded: yielding first looks cheaper,
+  but a client that hangs up never resumes the generator, so the last chunk the
+  gateway produced would be missing from precisely the truncated-stream case
+  that exists to capture it. Recording is capped at `MAX_RECORDED_EVENTS` and
+  performs no IO on the streaming path; a write failure is swallowed.
+
+Drive traffic deliberately when recording. Anything that reaches the gateway
+while the variable is set becomes a candidate fixture.
 
 ## Linting
 
@@ -65,68 +107,50 @@ The proxy-side tap is `recordExchange(rawCapture, provider)` (auto-named) or
 # via a TypeScript-aware runtime
 node --import tsx test/fixtures/tools/lint-corpus.ts
 
-# or through the test suite (same validation)
-npx vitest run test/fixtures/tools/corpus.test.ts
+# or through the test suite (same validation, runs in CI)
+npx vitest run test/fixtures/committed-corpus.test.ts
 ```
 
 Exit code is non-zero if any case fails; an empty corpus passes with a warning.
 
 ## Coverage matrix
 
-The committed corpus is currently **synthetic** (15 hand-authored cases,
-generated by `tools/generate-synthetic-corpus.ts`, scrubbed through the real
-scrubber — see `SYNTHETIC.md`). It exercises the tooling, linter, and parity
-harness end to end. **Real-traffic capture is still outstanding** (requires a
-live proxy, provider keys, and reproducible error conditions not available in
-the current environment); replacing each synthetic case with a real recording is
-the remaining AIPP-1 work.
+29 cases, all passing the linter: **14 real**, 15 synthetic.
 
-Committed synthetic cases: `anthropic/{plain-text, plain-text-stream,
-system-blocks, tools-and-tool-result, extended-thinking,
-prompt-caching-cache-control, count-tokens, error-4xx}`, `openai-chat/{text,
-tools, text-stream, error-429}`, `gemini/{text, text-stream}`, `ollama/text`.
+| Directory | Cases | Real | Synthetic |
+|---|---|---|---|
+| `anthropic` | 17 | 9 | 8 |
+| `openai-chat` | 7 | 3 | 4 |
+| `openai-responses` | 2 | 2 | 0 |
+| `gemini` | 2 | 0 | 2 |
+| `ollama` | 1 | 0 | 1 |
 
-Target cases (`status` = `synthetic` where a case above exists, else `pending`
-real capture):
+### Real captures
 
-### anthropic (`POST /v1/messages`, `POST /v1/messages/count_tokens`)
-
-| Case | Streaming | Status |
+| Directory | Case | Kind |
 |---|---|---|
-| plain-text | non-streaming + streaming | pending |
-| system-blocks | non-streaming | pending |
-| tools-and-tool-result | non-streaming + streaming | pending |
-| extended-thinking | non-streaming + streaming | pending |
-| prompt-caching-cache-control | non-streaming | pending |
-| count-tokens | non-streaming | pending |
-| error-4xx | non-streaming | pending |
-| error-429 | non-streaming | pending (where reproducible) |
-| error-5xx | non-streaming | pending (where reproducible) |
+| anthropic | `glm-plain-text`, `glm-plain-text-stream` | unary + streaming |
+| anthropic | `glm-system-blocks` | unary |
+| anthropic | `glm-tools`, `glm-tools-stream` | unary + streaming, tool_use |
+| anthropic | `gpt-4o-plain-text`, `gpt-4o-plain-text-stream` | unary + streaming |
+| anthropic | `glm-error-400`, `no-such-model-xyz-error-400` | error |
+| openai-chat | `gpt-4o-plain-text`, `gpt-4o-plain-text-stream` | unary + streaming |
+| openai-chat | `gpt-4o-tools` | unary, tool_calls |
+| openai-responses | `gpt-4o-plain-text`, `gpt-4o-plain-text-stream` | unary + streaming |
 
-### openai-chat (`POST /v1/chat/completions`, `openai` backend)
+### Still synthetic only
 
-| Case | Streaming | Status |
-|---|---|---|
-| text | non-streaming + streaming | pending |
-| tools | non-streaming + streaming | pending |
-| error-429 | non-streaming | pending (where reproducible) |
-| error-5xx | non-streaming | pending (where reproducible) |
+These have no real capture yet, and the reason is environmental rather than
+outstanding work:
 
-### gemini (`POST /v1/chat/completions`, `google` backend)
+| Case | Why not recorded |
+|---|---|
+| `gemini/*`, `ollama/*` | No Google credential and no local Ollama in this environment. |
+| `anthropic/extended-thinking` | Requires an Anthropic upstream; the gateway holds no Anthropic credential of its own and serves that provider only by forwarding a client's. |
+| `anthropic/prompt-caching-cache-control` | Same. |
+| `anthropic/count-tokens` | `/v1/messages/count_tokens` returns 400 for a non-Anthropic model, so only the error path is reachable here (recorded as `glm-error-400`). |
+| `error-429`, `error-5xx` | Not reproducible on demand against a live provider. |
 
-| Case | Streaming | Status |
-|---|---|---|
-| text | non-streaming + streaming | pending |
-| tools | non-streaming + streaming | pending |
-| error-5xx | non-streaming | pending (where reproducible) |
-
-### ollama (`POST /v1/chat/completions`, `ollama` backend)
-
-| Case | Streaming | Status |
-|---|---|---|
-| text | non-streaming + streaming | pending |
-| tools | non-streaming | pending |
-
-> Note: `/v1/chat/completions` routed to the `anthropic` backend (OpenAI->Anthropic
-> translation) is also covered under `openai-chat` cases whose request targets an
-> Anthropic model, per the baseline (section 4).
+Recording the Anthropic-upstream cases needs a run with `ANTHROPIC_API_KEY` set,
+or a capture taken from a Claude Code session — with the tool-schema caveat above
+in mind.
