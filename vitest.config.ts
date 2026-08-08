@@ -4,7 +4,10 @@ import { resolve } from 'node:path';
 export default defineConfig({
   resolve: {
     alias: {
-      '@relayplane/learning-engine': resolve(__dirname, '../learning-engine/src/index.ts'),
+      '@relayplane/learning-engine': resolve(
+        __dirname,
+        '../learning-engine/src/index.ts',
+      ),
     },
   },
   test: {
@@ -16,12 +19,10 @@ export default defineConfig({
       reporter: ['text', 'json', 'html'],
     },
     testTimeout: 10000,
-    // Run tests sequentially to avoid port conflicts
+    // Run tests sequentially to avoid port conflicts. `poolOptions` was removed
+    // in Vitest 4 and its contents are now top-level, so the nested form is
+    // silently ignored -- several suites bind real ports and would race.
     pool: 'forks',
-    poolOptions: {
-      forks: {
-        singleFork: true,
-      },
-    },
+    singleFork: true,
   },
 });

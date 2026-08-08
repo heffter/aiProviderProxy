@@ -59,11 +59,9 @@ export default defineConfig({
         statements: 80,
       },
     },
+    // See vitest.config.ts: `poolOptions` was removed in Vitest 4 and its
+    // contents are now top-level.
     pool: 'forks',
-    poolOptions: {
-      forks: {
-        singleFork: true,
-      },
-    },
+    singleFork: true,
   },
 });

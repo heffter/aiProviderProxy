@@ -235,6 +235,31 @@ function header(
 }
 
 /**
+ * Ask an OpenAI-style upstream to report usage on a streamed response.
+ *
+ * Chat Completions emits its trailing, choice-less usage chunk only when the
+ * request opts in; without this a streamed response carries no token counts at
+ * all, so the usage event, budget enforcement and the Tokemetry export all see
+ * zero spend. Applied only where the gateway builds the upstream body itself
+ * (the translated paths). The verbatim chat path forwards the client's own
+ * body, and injecting this there would add a usage chunk the client never
+ * asked for -- that stream is the client's to shape.
+ *
+ * @param body The upstream chat body the gateway constructed.
+ * @param streaming Whether this dispatch is streaming.
+ * @returns The body, with the usage opt-in added when streaming.
+ */
+function withStreamUsage(
+  body: Record<string, unknown>,
+  streaming: boolean,
+): Record<string, unknown> {
+  if (!streaming) {
+    return body;
+  }
+  return { ...body, stream_options: { include_usage: true } };
+}
+
+/**
  * Mark a response as an SSE stream (Task 17).
  *
  * Beyond the content type, the cache and buffering hints matter for real
@@ -1360,11 +1385,14 @@ export class Gateway {
             // A translated upstream streams too: its chat SSE is decoded and
             // re-encoded as Anthropic events chunk by chunk (subtask 17.5).
             stream: parsed.request.stream,
-            body: {
-              ...(anthropicToOpenAIRequest(parsed.request, hop.model)
-                .body as unknown as Record<string, unknown>),
-              stream: parsed.request.stream,
-            },
+            body: withStreamUsage(
+              {
+                ...(anthropicToOpenAIRequest(parsed.request, hop.model)
+                  .body as unknown as Record<string, unknown>),
+                stream: parsed.request.stream,
+              },
+              parsed.request.stream,
+            ),
             headers: request.headers,
             upstreamProtocol: 'openai_chat',
           };
@@ -1842,11 +1870,14 @@ export class Gateway {
       : {
           model: resolved.model,
           stream: parsed.request.stream,
-          body: responsesToChatBody(parsed.request, resolved.model, {
-            provider: resolved.provider,
-            reasoningCapable: adapter.capabilities.reasoning,
-            toolsCapable: adapter.capabilities.tools,
-          }) as unknown as Record<string, unknown>,
+          body: withStreamUsage(
+            responsesToChatBody(parsed.request, resolved.model, {
+              provider: resolved.provider,
+              reasoningCapable: adapter.capabilities.reasoning,
+              toolsCapable: adapter.capabilities.tools,
+            }) as unknown as Record<string, unknown>,
+            parsed.request.stream,
+          ),
           headers: request.headers,
           upstreamProtocol: 'openai_chat',
         };
