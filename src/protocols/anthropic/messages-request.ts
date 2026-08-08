@@ -26,9 +26,16 @@ export interface ParsedMessagesRequest {
   raw: Record<string, unknown>;
 }
 
-/** A single input message (role + content). */
+/**
+ * A single input message (role + content).
+ *
+ * `system` is a mid-conversation system message: an operator instruction placed
+ * in the `messages` array rather than the top-level `system` field, so it does
+ * not invalidate the cached prefix. Claude Code sends these, and the upstream
+ * API accepts them on the models that support the feature.
+ */
 export interface MessageInput {
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'system';
   content: string | ContentBlock[];
 }
 
@@ -63,8 +70,14 @@ function validateMessage(message: unknown, index: number): string | undefined {
     return `messages.${index}: must be an object`;
   }
   const role = message.role;
-  if (role !== 'user' && role !== 'assistant') {
-    return `messages.${index}.role: must be "user" or "assistant"`;
+  // `system` is accepted alongside user/assistant: a mid-conversation system
+  // message is a valid Messages request on the models that support it, and the
+  // gateway must not be stricter than the upstream it proxies -- rejecting a
+  // request the real API would accept is the worse failure, since the client
+  // has no way around it. Placement rules (must follow a user turn, never
+  // first, text-only) are deliberately left to the upstream to enforce.
+  if (role !== 'user' && role !== 'assistant' && role !== 'system') {
+    return `messages.${index}.role: must be "user", "assistant", or "system"`;
   }
   const content = message.content;
   if (typeof content === 'string') {
